@@ -157,6 +157,10 @@ struct BackupPreferences: Codable {
     struct Removable {
         let assets: [PHAsset]
         let bytes: Int64
+        /// Verified when uploaded, but not on the NAS now, or the iPhone's original has changed since. Kept on the iPhone.
+        var missing = 0
+        /// The NAS couldn't be checked, so nothing is offered.
+        var failure: String?
     }
     /// iPhone items whose every backed-up resource was byte-verified on the NAS. Items only
     /// "accepted" (verification off) are never offered for removal.
@@ -184,10 +188,48 @@ struct BackupPreferences: Codable {
             }
             guard verified else { continue }
             result.append(asset)
-            bytes += resources.reduce(Int64(0)) { $0 + ((($1.1.value(forKey: "fileSize") as? Int64)) ?? 0) }
         }
         progress(fetch.count, fetch.count)
-        return Removable(assets: result, bytes: bytes)
+        // The byte check happened at upload time. Before offering removal, confirm the NAS still lists each
+        // item now: by the ID it was uploaded as, or (after a re-index changes IDs) the same filename,
+        // type and capture time. Anything not found stays on the iPhone.
+        guard !result.isEmpty else { return Removable(assets: [], bytes: 0) }
+        let catalog: [RemotePhoto]
+        do { catalog = try await nasCatalog(shared: settings.shared) }
+        catch { return Removable(assets: [], bytes: 0, failure: "Couldn’t check the NAS, so nothing was offered. " + error.localizedDescription) }
+        let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var byStem: [String: [RemotePhoto]] = [:]
+        for photo in catalog { byStem[(photo.filename.lowercased() as NSString).deletingPathExtension, default: []].append(photo) }
+        let linked = Dictionary(grouping: queue.photoLinks.filter { $0.shared == settings.shared }, by: \.localID)
+        var confirmed: [PHAsset] = []; var missing = 0
+        for asset in result {
+            let resources = PHAssetResource.assetResources(for: asset)
+            var matches = (linked[asset.localIdentifier] ?? []).compactMap { byID[$0.remoteID] }
+            if matches.isEmpty, let local = PhoneLibraryIndex.descriptor(asset, resources: resources) {
+                let stems = Set((local.localResourceNames ?? [local.filename]).map { ($0.lowercased() as NSString).deletingPathExtension })
+                matches = stems.flatMap { stem in (byStem[stem] ?? []).filter { UnifiedLibrary.matchScore(remote: $0, local: local) != nil } }
+            }
+            // The phone's original must still be the size the NAS has. iOS can replace an original after it was
+            // uploaded (for example when it finishes processing a new photo); then the phone copy is the one to keep.
+            let primary = resources.first { $0.type == (asset.mediaType == .video ? .video : .photo) }
+            let size = primary.flatMap { $0.value(forKey: "fileSize") as? Int64 }
+            let present = matches.contains { remote in remote.filesize != nil && remote.filesize == size }
+            guard present else { missing += 1; continue }
+            confirmed.append(asset)
+            bytes += resources.reduce(Int64(0)) { $0 + (($1.value(forKey: "fileSize") as? Int64) ?? 0) }
+        }
+        return Removable(assets: confirmed, bytes: bytes, missing: missing)
+    }
+    /// A fresh NAS listing for a space. Deliberately not the timeline's cached index: removing phone copies
+    /// must reflect what the NAS holds right now.
+    private func nasCatalog(shared: Bool) async throws -> [RemotePhoto] {
+        guard let client else { throw ConnectionError.signedOut }
+        var all: [RemotePhoto] = []; var offset = 0
+        while true {
+            let page = try await client.items(.all, shared: shared, offset: offset)
+            all += page; offset += page.count
+            if page.count < DSMClient.pageSize { return all }
+        }
     }
 
     // MARK: Conditions

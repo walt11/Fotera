@@ -67,7 +67,7 @@ struct DuplicatesView: View {
                     description: Text("No exact copies or burst shots in \(app.shared ? "Shared Space" : "your library")."))
             } else {
                 Section {
-                    Text("\(groups.count) groups · \(selected.count) selected to delete. In copies and bursts the first photo is kept; similar photos start unselected. Tap photos to change.")
+                    Text("\(groups.count) groups · \(selected.count) selected to delete. In exact copies the first photo is kept; bursts and similar photos start unselected. Tap photos to change.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(groups) { group in
@@ -134,8 +134,8 @@ struct DuplicatesView: View {
                 found.sort { ($0.items.first?.time ?? 0) > ($1.items.first?.time ?? 0) }
             }
             groups = found
-            // Similar photos aren't copies, so nothing in those groups is pre-selected.
-            selected = Set(found.filter { $0.kind != .similar }.flatMap { $0.items.dropFirst().map(\.id) })
+            // Only exact copies are pre-selected. Bursts and similar photos are different shots, so you pick those yourself.
+            selected = Set(found.filter { $0.kind == .exact }.flatMap { $0.items.dropFirst().map(\.id) })
             scanned = true
         }
     }

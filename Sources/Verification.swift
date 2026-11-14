@@ -97,6 +97,52 @@ import Photos
                 }
                 record("FINISHED"); return
             }
+            if ProcessInfo.processInfo.arguments.contains("--integrity-probe") {
+                // Read-only: compares NAS originals with the iPhone's original files, and dry-runs Free up space.
+                _ = await BackupScheduler.ensureAttached()
+                record("recycle bin on: \(String(describing: try? await client.recycleBinEnabled(shared: false)))")
+                var catalog: [RemotePhoto] = []; var offset = 0
+                while true { let page = try await client.items(.all, shared: false, offset: offset); catalog += page; offset += page.count; if page.count < DSMClient.pageSize { break } }
+                let phone = await PhoneLibraryIndex.shared.photos()
+                let pairs = UnifiedLibrary.merge(remote: catalog, local: phone).filter { $0.id > 0 && $0.localAssetID != nil }
+                record("NAS \(catalog.count), iPhone \(phone.count), on both \(pairs.count)")
+                var picks: [RemotePhoto] = []
+                for kind in ["photo", "live", "video"] {
+                    picks += pairs.filter { $0.type == kind && ($0.filename.lowercased().hasSuffix(".heic") || kind != "photo") }.prefix(3)
+                }
+                picks += pairs.filter { $0.type == "photo" && !$0.filename.lowercased().hasSuffix(".heic") }.prefix(2)
+                var passed = 0, failed = 0
+                for item in picks {
+                    guard let id = item.localAssetID, let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else { continue }
+                    let file = try await (item.isLive ? client.livePackage(item, shared: false) : client.original(item, shared: false))
+                    defer { try? FileManager.default.removeItem(at: file) }
+                    let nas = try await TransferQueue.originalDigests(file, live: item.isLive)
+                    let wanted: [PHAssetResourceType] = item.isVideo ? [.video] : (item.isLive ? [.photo, .pairedVideo] : [.photo])
+                    var lines: [String] = []; var ok = true
+                    for resource in PHAssetResource.assetResources(for: asset) where wanted.contains(resource.type) {
+                        let local = FileManager.default.temporaryDirectory.appendingPathComponent("Integrity-" + UUID().uuidString)
+                        defer { try? FileManager.default.removeItem(at: local) }
+                        let (digest, size) = try await StagedExport.write(resource, to: local)
+                        let same = nas.contains(digest); ok = ok && same
+                        lines.append("\(resource.originalFilename) \(size / 1024) KB \(same ? "identical" : "DIFFERENT")")
+                    }
+                    if ok && !lines.isEmpty { passed += 1 } else { failed += 1 }
+                    record("\(ok && !lines.isEmpty ? "PASS" : "FAIL") \(item.type) \(item.filename): " + lines.joined(separator: ", "))
+                    if !ok {
+                        let iso = ISO8601DateFormatter()
+                        let types = PHAssetResource.assetResources(for: asset).map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(separator: " ")
+                        let nasSize = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { "\($0 / 1024) KB" } ?? "?"
+                        let links = (BackupController.shared.queue?.photoLinks ?? []).filter { $0.localID == id }.map { "remote \($0.remoteID) at \(iso.string(from: $0.created))" }
+                        record("  NAS id \(item.id) \(nasSize); created \(asset.creationDate.map(iso.string) ?? "?"), modified \(asset.modificationDate.map(iso.string) ?? "?"), edited \(asset.hasAdjustments); resources \(types); uploads \(links)")
+                    }
+                }
+                record("originals: \(passed) identical, \(failed) different")
+                if BackupController.shared.queue != nil {
+                    let dry = await BackupController.shared.verifiedRemovable(olderThan: 0) { _, _ in }
+                    record("free up space (dry run): \(dry.assets.count) removable, \(dry.missing) verified but not on NAS now, failure \(dry.failure ?? "none")")
+                } else { record("free up space (dry run): backup not attached") }
+                record("FINISHED"); return
+            }
             if ProcessInfo.processInfo.arguments.contains("--speed-probe") {
                 // Read-only timing of the requests behind opening photos, videos and Live Photos.
                 let page = try await client.items(.all, shared: false, offset: 0, withLocation: true)

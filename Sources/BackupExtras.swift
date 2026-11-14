@@ -184,6 +184,11 @@ struct FreeUpSpaceView: View {
                 } else if let result {
                     LabeledContent("Verified on NAS", value: "\(result.assets.count.formatted()) items")
                     LabeledContent("Space to free", value: ByteCountFormatter.string(fromByteCount: result.bytes, countStyle: .file))
+                    if result.missing > 0 {
+                        Text("\(result.missing.formatted()) backed-up \(result.missing == 1 ? "item stays" : "items stay") on this iPhone: \(result.missing == 1 ? "it isn’t" : "they aren’t") on the NAS anymore, or the iPhone’s original has changed since the backup.")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                    if let failure = result.failure { Text(failure).font(.footnote).foregroundStyle(.red) }
                     Button(role: .destructive) { Task { await remove(result.assets) } } label: {
                         Text(result.assets.isEmpty ? "Nothing to remove" : "Remove \(result.assets.count.formatted()) items from iPhone")
                     }

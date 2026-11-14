@@ -247,26 +247,28 @@ actor PhoneLibraryIndex {
             if let known = previous[asset.localIdentifier], known.localVersion == asset.modificationDate?.timeIntervalSince1970 {
                 items.append(known); fresh[asset.localIdentifier] = known; return
             }
-            let resources = PHAssetResource.assetResources(for: asset)
-            let resource = resources.first { $0.type == (asset.mediaType == .video ? .video : .photo) } ?? resources.first
-            guard let resource else { return }
-            let date = asset.creationDate
-            // DSM dates are wall-clock UTC; encode phone dates in the same coordinate system.
-            let wall = date.map { $0.timeIntervalSince1970 + Double(TimeZone.current.secondsFromGMT(for: $0)) }
-            var item = RemotePhoto(id: UnifiedLibrary.localID(asset.localIdentifier), filename: resource.originalFilename,
-                                   time: wall, type: asset.mediaType == .video ? "video" : (asset.mediaSubtypes.contains(.photoLive) ? "live" : "photo"))
-            item.localAssetID = asset.localIdentifier
-            item.localVersion = asset.modificationDate?.timeIntervalSince1970
-            item.localCaptureTime = asset.creationDate?.timeIntervalSince1970
-            item.localResourceNames = resources.filter {
-                asset.mediaType == .video ? [.video, .fullSizeVideo].contains($0.type) : [.photo, .fullSizePhoto, .alternatePhoto].contains($0.type)
-            }.map(\.originalFilename)
-            item.additional = .init(thumbnail: nil, gps: asset.location.map { .init(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) },
-                                    video_meta: asset.mediaType == .video ? .init(duration: Int(asset.duration * 1000)) : nil)
+            guard let item = Self.descriptor(asset, resources: PHAssetResource.assetResources(for: asset)) else { return }
             items.append(item); fresh[asset.localIdentifier] = item
         }
         cached = items; entries = fresh
         return items
+    }
+    /// Describes a phone asset in the NAS's terms (filename, wall-clock capture time, type) for matching.
+    nonisolated static func descriptor(_ asset: PHAsset, resources: [PHAssetResource]) -> RemotePhoto? {
+        guard let resource = resources.first(where: { $0.type == (asset.mediaType == .video ? .video : .photo) }) ?? resources.first else { return nil }
+        // DSM dates are wall-clock UTC; encode phone dates in the same coordinate system.
+        let wall = asset.creationDate.map { $0.timeIntervalSince1970 + Double(TimeZone.current.secondsFromGMT(for: $0)) }
+        var item = RemotePhoto(id: UnifiedLibrary.localID(asset.localIdentifier), filename: resource.originalFilename,
+                               time: wall, type: asset.mediaType == .video ? "video" : (asset.mediaSubtypes.contains(.photoLive) ? "live" : "photo"))
+        item.localAssetID = asset.localIdentifier
+        item.localVersion = asset.modificationDate?.timeIntervalSince1970
+        item.localCaptureTime = asset.creationDate?.timeIntervalSince1970
+        item.localResourceNames = resources.filter {
+            asset.mediaType == .video ? [.video, .fullSizeVideo].contains($0.type) : [.photo, .fullSizePhoto, .alternatePhoto].contains($0.type)
+        }.map(\.originalFilename)
+        item.additional = .init(thumbnail: nil, gps: asset.location.map { .init(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) },
+                                video_meta: asset.mediaType == .video ? .init(duration: Int(asset.duration * 1000)) : nil)
+        return item
     }
 }
 
