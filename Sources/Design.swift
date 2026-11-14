@@ -43,6 +43,28 @@ enum AppearanceSetting: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Zoom transition
+
+extension View {
+    /// Marks a grid tile as the origin of the viewer's zoom transition (iOS 18+).
+    @ViewBuilder func zoomSource(id: Int, in namespace: Namespace.ID) -> some View {
+        if #available(iOS 18.0, *) { matchedTransitionSource(id: id, in: namespace) } else { self }
+    }
+    /// Opens the viewer by zooming out of its grid tile, like Immich and Ente (iOS 18+).
+    @ViewBuilder func zoomTransition(sourceID: Int, in namespace: Namespace.ID) -> some View {
+        if #available(iOS 18.0, *) { navigationTransition(.zoom(sourceID: sourceID, in: namespace)) } else { self }
+    }
+    /// A sidebar on iPad and a tab bar on iPhone (iOS 18+).
+    @ViewBuilder func adaptiveTabs() -> some View {
+        if #available(iOS 18.0, *) { tabViewStyle(.sidebarAdaptable) } else { self }
+    }
+}
+
+enum Haptics {
+    @MainActor static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    @MainActor static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+}
+
 // MARK: - Skeleton placeholders
 
 /// Pulsing placeholder tiles shown while a grid loads, instead of a spinner.
@@ -185,6 +207,11 @@ struct MemoryStoryView: View {
                 Color.clear.contentShape(Rectangle()).onTapGesture { step(1) }
             }
             .onLongPressGesture(minimumDuration: 0.2, perform: {}, onPressingChanged: { paused = $0 })
+            .accessibilityElement()
+            .accessibilityLabel("\(memory.title), item \(index + 1) of \(items.count)")
+            .accessibilityAction(named: "Next") { step(1) }
+            .accessibilityAction(named: "Previous") { step(-1) }
+            .accessibilityAction(named: paused ? "Resume" : "Pause") { paused.toggle() }
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 3) {
                     ForEach(items.indices, id: \.self) { position in

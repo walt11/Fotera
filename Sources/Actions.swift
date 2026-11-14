@@ -19,7 +19,7 @@ import Photos
         Task {
             defer { busy = nil }
             do { if let result = try await operation() { message = result } }
-            catch { if !isCancelledRequest(error) { message = error.localizedDescription } }
+            catch { if !isCancelledRequest(error) { Haptics.warning(); message = error.localizedDescription } }
         }
     }
     func setFavorite(_ items: [RemotePhoto], value: Bool, app: AppModel, completion: (() -> Void)? = nil) {
@@ -28,6 +28,7 @@ import Photos
         run(value ? "Adding to favorites…" : "Removing from favorites…") {
             try await client.setFavorite(ids: items.map(\.id), shared: shared, value: value)
             FavoriteMarks.shared.set(items.map(\.id), value)
+            Haptics.success()
             completion?()
             return nil
         }
@@ -145,6 +146,7 @@ import Photos
         run("Deleting…") {
             try await client.deletePhotos(ids: items.map(\.id), shared: shared, permanent: true)
             app.library.remove(ids: Set(items.map(\.id)))
+            Haptics.success()
             completion()
             return nil
         }

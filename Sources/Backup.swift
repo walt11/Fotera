@@ -126,6 +126,7 @@ struct BackupPreferences: Codable {
         guard authorization == .authorized || authorization == .limited else {
             status = "Allow photo access in iOS Settings to back up."; return
         }
+        await BackupNotifier.requestPermission()
         if !preferences.includeExisting {
             var baseline: [String] = []
             PHAsset.fetchAssets(with: nil).enumerateObjects { asset, _, _ in baseline.append(asset.localIdentifier) }
@@ -145,6 +146,44 @@ struct BackupPreferences: Codable {
         status = "Backup is off."
     }
     private var baselineURL: URL { folder.appendingPathComponent("baseline.json") }
+
+    // MARK: Free up space
+
+    struct Removable {
+        let assets: [PHAsset]
+        let bytes: Int64
+    }
+    /// iPhone items whose every backed-up resource was byte-verified on the NAS. Items only
+    /// "accepted" (verification off) are never offered for removal.
+    func verifiedRemovable(olderThan days: Int, progress: @escaping (Int, Int) -> Void) async -> Removable {
+        guard let queue, preferences.destination != nil else { return Removable(assets: [], bytes: 0) }
+        let settings = preferences
+        let fetch = fetchAssets(settings)
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        var result: [PHAsset] = []; var bytes: Int64 = 0
+        for index in 0..<fetch.count {
+            if index % 200 == 0 { progress(index, fetch.count); await Task.yield() }
+            if Task.isCancelled { break }
+            let asset = fetch.assets.object(at: index)
+            guard (asset.creationDate ?? Date()) < cutoff, stagedAssets.contains(assetKey(asset, settings)) else { continue }
+            // Edited photos qualify only if their edited rendering was backed up and verified too.
+            let edited: [PHAssetResourceType] = [.fullSizePhoto, .fullSizeVideo, .fullSizePairedVideo]
+            let resources = PHAssetResource.assetResources(for: asset).enumerated().filter { _, resource in
+                [.photo, .video, .pairedVideo, .alternatePhoto].contains(resource.type) || (asset.hasAdjustments && edited.contains(resource.type))
+            }
+            guard !resources.isEmpty, !asset.hasAdjustments || settings.includeEdited else { continue }
+            let stamp = Int(asset.modificationDate?.timeIntervalSince1970 ?? 0)
+            let verified = resources.allSatisfy { index, resource in
+                let suffix = edited.contains(resource.type) ? "|e\(stamp)" : ""
+                return queue.verifiedSources.contains(prefix + "|" + asset.localIdentifier + "|\(resource.type.rawValue)|\(index)" + suffix)
+            }
+            guard verified else { continue }
+            result.append(asset)
+            bytes += resources.reduce(Int64(0)) { $0 + ((($1.1.value(forKey: "fileSize") as? Int64)) ?? 0) }
+        }
+        progress(fetch.count, fetch.count)
+        return Removable(assets: result, bytes: bytes)
+    }
 
     // MARK: Conditions
 
@@ -193,13 +232,21 @@ struct BackupPreferences: Codable {
     }
     func waitUntilIdle() async { await runTask?.value }
     /// Runs one bounded pass, including verification, so background completions advance the ledger.
-    func run(deadline: Date?, background: Bool) async {
+    func run(deadline: Date?, background: Bool, trigger: String? = nil) async {
         guard preferences.enabled, !running, let client, let queue, let destination = preferences.destination else { return }
         guard conditionsMet() else { return }
         running = true
         cachedTotal = nil
+        let started = Date(), finishedBefore = queue.completed.count, attentionBefore = queue.attention.count
+        var staged = 0
         defer {
             running = false; updateCounts()
+            let finished = queue.completed.count - finishedBefore
+            BackupLog.shared.record(BackupLog.Entry(date: started, trigger: trigger ?? (background ? "background" : "foreground"),
+                seconds: Date().timeIntervalSince(started), staged: staged, finished: finished,
+                attention: queue.attention.count, status: status))
+            BackupNotifier.runFinished(newItems: finished, attention: queue.attention.count, previousAttention: attentionBefore,
+                                       upToDate: queue.pending.isEmpty && status == "Up to date")
             if preferences.enabled, !Task.isCancelled, !queue.pending.isEmpty, !background {
                 retryTask?.cancel()
                 retryTask = Task { [weak self] in
@@ -217,15 +264,16 @@ struct BackupPreferences: Codable {
             while !Task.isCancelled {
                 if let deadline, Date() > deadline { break }
                 guard conditionsMet() else { return }
-                let staged = try await stage(fetch, cursor: &cursor, destination: destination, settings: settings, queue: queue,
+                let batch = try await stage(fetch, cursor: &cursor, destination: destination, settings: settings, queue: queue,
                                              deadline: deadline, budget: background ? (40, 1_500_000_000) : (24, 600_000_000), errors: &errors)
+                staged += batch
                 updateCounts()
                 status = remainingDescription()
                 let healthy = await queue.process(client: client, wifiOnly: settings.wifiOnly, verify: settings.verify,
                                                   verifyVideos: settings.verifyVideos, deadline: deadline, maxInFlight: background ? 12 : 4, verifyAllowed: true)
                 updateCounts()
                 if !healthy { status = "Some uploads couldn’t start. Will retry."; return }
-                if staged == 0 && (!queue.pending.isEmpty || cursor >= fetch.count) { break }
+                if batch == 0 && (!queue.pending.isEmpty || cursor >= fetch.count) { break }
             }
             guard !Task.isCancelled else { status = "Paused"; return }
             if queue.pending.isEmpty && cursor >= fetch.count {
@@ -503,6 +551,16 @@ struct BackupView: View {
                 }
             } header: { Text("Options") } footer: {
                 Text("Backup progress also appears on the Lock Screen when Live Activities are allowed. Updates may pause while iOS suspends Fotera. Verification downloads each upload from the NAS and compares it byte for byte. Uploads continue while Fotera is in the background; iOS decides when background work runs, so opening Fotera now and then keeps backup current.")
+            }
+            Section {
+                NavigationLink { BackupHistoryView() } label: { Label("Backup history", systemImage: "clock.arrow.circlepath") }
+                NavigationLink { FreeUpSpaceView(backup: backup) } label: { Label("Free up space", systemImage: "iphone.and.arrow.forward") }
+                Toggle(isOn: Binding(get: { BackupNotifier.enabled }, set: { value in
+                    UserDefaults.standard.set(value, forKey: "backupNotifications")
+                    if value { Task { await BackupNotifier.requestPermission() } }
+                })) { Label("Notifications", systemImage: "bell") }
+            } footer: {
+                Text("Notifications tell you when a backup finishes in the background, when files need attention, or when backup hasn’t completed for 3 days.")
             }
             if let queue = backup.queue { TransferListSections(queue: queue) }
         }

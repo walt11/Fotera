@@ -14,7 +14,7 @@ struct LibraryTab: View {
     @State private var sharedCount: Int?
     @ObservedObject private var favorites = FavoriteMarks.shared
     @AppStorage("albumSort") private var sort = "recent"
-    enum Destination: String, Identifiable { case smart, offline, folders, trash, upload; var id: String { rawValue } }
+    enum Destination: String, Identifiable { case recent, duplicates, smart, offline, folders, trash, upload; var id: String { rawValue } }
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -33,6 +33,8 @@ struct LibraryTab: View {
                     Text("Albums").font(.title3.bold())
                     Spacer()
                     Menu {
+                        Button("Recently added", systemImage: "clock") { destination = .recent }
+                        Button("Duplicates", systemImage: "square.on.square") { destination = .duplicates }
                         Button("Smart albums", systemImage: "sparkles.rectangle.stack") { destination = .smart }
                         Button("Offline albums", systemImage: "arrow.down.circle") { destination = .offline }
                         Button("Folders", systemImage: "folder") { destination = .folders }
@@ -75,6 +77,8 @@ struct LibraryTab: View {
             .navigationTitle("Library")
             .navigationDestination(item: $destination) { destination in
                 switch destination {
+                case .recent: CollectionScreen(title: "Recently added", source: .recentlyAdded)
+                case .duplicates: DuplicatesView(library: library)
                 case .smart: SmartAlbumsView()
                 case .offline: OfflineAlbumsView()
                 case .folders: FolderView(folder: nil)
@@ -206,7 +210,7 @@ struct AlbumDetailView: View {
                         Button("Share link", systemImage: "link") { sharing = true }
                         Button("Rename", systemImage: "pencil") { newName = album.name; renaming = true }
                         Button("Delete album", systemImage: "trash", role: .destructive) { deleting = true }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                    } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("Album options")
                 }
             }
         }
@@ -326,6 +330,7 @@ struct PhotoSelectionSheet: View {
 enum CollectionSource: Hashable {
     case filter(ItemFilter)
     case search(String)
+    case recentlyAdded
 }
 
 /// A paginated grid for favorites, people, places, folders and searches.
@@ -367,12 +372,13 @@ struct CollectionScreen<Header: View>: View {
             switch source {
             case .filter(let filter): page = try await client.items(filter, shared: app.shared, offset: offset)
             case .search(let keyword): page = try await client.search(keyword: keyword, shared: app.shared, offset: offset)
+            case .recentlyAdded: page = try await client.recentlyAdded(shared: app.shared, offset: offset)
             }
             var seen = Set(reset ? [] : items.map(\.id))
             let added = page.filter { seen.insert($0.id).inserted }
             items = reset ? added : items + added
-            if case .search = source { more = page.count >= 100 && !added.isEmpty }
-            else { more = page.count >= DSMClient.pageSize && !added.isEmpty }
+            if case .filter = source { more = page.count >= DSMClient.pageSize && !added.isEmpty }
+            else { more = page.count >= 100 && !added.isEmpty }
         } catch {
             if !isCancelledRequest(error) { failure = error.localizedDescription; more = false }
         }

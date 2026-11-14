@@ -45,6 +45,8 @@ struct TransferRecord: Codable, Identifiable {
     @Published private(set) var activity: String?
     @Published var failure: String?
     private(set) var completed = Set<String>()
+    /// Sources whose NAS copy was byte-verified. Only these count as safe to remove from the iPhone.
+    private(set) var verifiedSources = Set<String>()
     private var activeSources = Set<String>()
     private let directory: URL
     private var task: Task<Void, Never>?
@@ -80,6 +82,10 @@ struct TransferRecord: Codable, Identifiable {
                 records = try JSONDecoder().decode([TransferRecord].self, from: Data(contentsOf: index))
                 for i in records.indices where records[i].state == .verifying { records[i].state = .uploaded }
             }
+            if let log = try? String(contentsOf: verifiedLog, encoding: .utf8) {
+                verifiedSources = Set(log.split(separator: "\n").map(String.init))
+            }
+            for record in records where record.state == .verified { if let source = record.sourceID { verifiedSources.insert(source) } }
             if let log = try? String(contentsOf: completedLog, encoding: .utf8) {
                 completed = Set(log.split(separator: "\n").map(String.init))
             }
@@ -95,6 +101,14 @@ struct TransferRecord: Codable, Identifiable {
         }
     }
     private var completedLog: URL { directory.appendingPathComponent("completed.log") }
+    private var verifiedLog: URL { directory.appendingPathComponent("verified.log") }
+    private static func append(_ line: String, to url: URL) {
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile(); handle.write(Data((line + "\n").utf8)); try? handle.close()
+        } else {
+            try? Data((line + "\n").utf8).write(to: url, options: .completeFileProtectionUntilFirstUserAuthentication)
+        }
+    }
     /// Coalesces ledger writes (at most one every half second). Writes that must survive a crash pass `immediate`.
     private func persist(immediate: Bool = false) {
         if immediate { pendingWrite?.cancel(); pendingWrite = nil; writeNow(); return }
@@ -179,7 +193,10 @@ struct TransferRecord: Codable, Identifiable {
         try? FileManager.default.removeItem(at: source(records[index]))
         UploadReceipt.remove(records[index].id)
         markCompleted(records[index].sourceID)
-        if let sourceID = records[index].sourceID { activeSources.remove(sourceID) }
+        if let sourceID = records[index].sourceID {
+            activeSources.remove(sourceID)
+            if state == .verified, verifiedSources.insert(sourceID).inserted { Self.append(sourceID, to: verifiedLog) }
+        }
         let finished = records.indices.filter { records[$0].state.isFinished }
         if finished.count > Self.historyLimit {
             let drop = Set(finished.prefix(finished.count - Self.historyLimit).map { records[$0].id })
@@ -575,8 +592,8 @@ struct PickedFile: Transferable {
 struct TransfersView: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject var queue: TransferQueue
-    @AppStorage("uploadSpaceShared") private var shared = false
-    @AppStorage("uploadFolderPath") private var folderPath = ""
+    @AppStorage("uploadSpaceShared", store: .foteraGroup) private var shared = false
+    @AppStorage("uploadFolderPath", store: .foteraGroup) private var folderPath = ""
     @State private var choosing = false
     @State private var importing = false
     @State private var picked: [PhotosPickerItem] = []

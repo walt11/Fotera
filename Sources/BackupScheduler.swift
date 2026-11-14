@@ -52,7 +52,8 @@ import UIKit
         let backup = BackupController.shared
         await backup.waitForNetwork()
         if backup.running { backup.updateCounts(); return }
-        await backup.run(deadline: Date().addingTimeInterval(seconds), background: true)
+        await backup.run(deadline: Date().addingTimeInterval(seconds), background: true, trigger: "wake")
+        BackupNotifier.checkStalled()
     }
     /// Only called from explicit Enable / Back up now / Continue actions while foregrounded.
     static func requestContinuedBackup() {
@@ -122,7 +123,8 @@ import UIKit
             guard await ensureAttached() else { return }
             await backup.waitForNetwork()
             guard !backup.running else { return }
-            await backup.run(deadline: deadline, background: deadline != nil)
+            await backup.run(deadline: deadline, background: deadline != nil, trigger: deadline == nil ? "overnight" : "refresh")
+            BackupNotifier.checkStalled()
         }
         task.expirationHandler = {
             Task { @MainActor in

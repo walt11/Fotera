@@ -35,15 +35,32 @@ Deleting requires the Synology Photos recycle bin to be enabled. Library → Rec
 - **Connections** configures a preferred private LAN address and QuickConnect fallback. Each route must identify the same NAS before Fotera uses it. The original address remains the account/backup identity.
 - **Widgets** include album, person and backup status. Choose album/person content in its detail screen; iOS controls widget refresh timing.
 
+## More features
+
+- **Accounts**: Settings → Accounts lists every signed-in NAS account. Switch with a tap or add another; backup runs for the account in use.
+- **Sign in again**: if a session expires without a saved password, a sheet asks for it over the current screen instead of returning to the login page.
+- **Lock with Face ID** (Settings → Viewing) covers the app, including open sheets, whenever it leaves the foreground.
+- **Duplicates** (Library → ⋯): exact copies and burst shots from the index, plus look-alikes from Synology Photos' Similar photos feature when it is on. Copies and bursts pre-select all but one photo; similar photos start unselected.
+- **Recently added** (Library → ⋯) lists the newest uploads regardless of capture date.
+- **Shared with me** opens shared albums inside Fotera (with a link to Synology's web viewer if the NAS doesn't allow it).
+- **Video quality** (Settings → Viewing): fast start (the NAS's smaller version), original on Wi‑Fi, or always original.
+- **Share sheet**: choose **Upload to Fotera** in Photos, Files or any app. Items upload to the Upload to NAS folder the next time Fotera opens.
+- **Shortcuts / Siri**: Back Up Now, Upload Latest Photo and Show Memories.
+- **iPad**: sidebar navigation and wider grids.
+
 ## Backup
 
 Settings → Backup (or the cloud icon). Choose a space and folder, then turn backup on. Originals, both Live Photo resources and RAW+JPEG pairs are uploaded. Edited versions are optional. Uploads run on a background URLSession and continue while Fotera is suspended. iOS wakes Fotera to queue more when uploads finish and through scheduled background tasks. With "Verify every upload" on, each file is downloaded back and compared byte for byte before it counts as backed up.
 
 Before uploading, Fotera checks all indexed photos in the selected Personal or Shared Space, across folders. Only items with the same file size, or Live Photos with the same base name, are considered, so existing libraries aren't downloaded wholesale; an exact SHA-256 match of the downloaded original (including individual Live Photo components) is required to skip the upload. Names alone never establish a match. Existing matches are recorded as verified backups without moving or copying the NAS file. If discovery or comparison fails, the resource stays queued for retry. Checks cannot see files outside Synology Photos, items not yet indexed, or another space. Comparing originals can require substantial downloads; candidate digests persist between launches to accelerate comparisons. A cached matching digest is rechecked against a fresh NAS download before an upload is skipped.
 
+Backup → **Backup history** records every foreground and background run (exportable as CSV). **Free up space** removes iPhone copies of items whose NAS copy was byte-verified (and whose edits were backed up), after the iOS confirmation; they stay in Recently Deleted for 30 days. **Notifications** report finished background backups, items needing attention, and backups that haven't completed for 3 days.
+
 iOS controls background execution, so open Fotera occasionally to keep backup current. Don't delete photos from the iPhone based on backup status until real-device trials (see IMPLEMENTATION.md) are complete.
 
 ## Development
+
+Unit tests: `xcodebuild -project Fotera.xcodeproj -scheme Fotera -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test`.
 
 Launch arguments (Debug only): `--fotera-verify` runs NAS checks and writes `Documents/verification.txt`. `--fotera-screen viewer|info|search|library|backup|settings|select` opens a screen for screenshots.
 

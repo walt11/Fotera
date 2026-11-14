@@ -31,7 +31,11 @@ struct PhotoGrid<Header: View>: View {
     var onReachEnd: (() -> Void)? = nil
     var onChange: () -> Void = {}
     @ViewBuilder var header: () -> Header
-    @AppStorage("gridColumns") private var columns = 4
+    @AppStorage("gridColumns") private var storedColumns = 4
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Namespace private var zoomNamespace
+    /// iPad and other wide layouts show more columns for the same pinch setting.
+    private var columns: Int { sizeClass == .regular ? storedColumns + 3 : storedColumns }
     @ObservedObject private var favorites = FavoriteMarks.shared
     @State private var viewer: ViewerRequest?
     @State private var scrollFraction: CGFloat = 0
@@ -80,11 +84,12 @@ struct PhotoGrid<Header: View>: View {
             }
         }
         .simultaneousGesture(MagnifyGesture().onEnded { value in
-            if value.magnification > 1.25 { columns = max(2, columns - 1) }
-            else if value.magnification < 0.8 { columns = min(7, columns + 1) }
+            if value.magnification > 1.25 { storedColumns = max(2, storedColumns - 1) }
+            else if value.magnification < 0.8 { storedColumns = min(7, storedColumns + 1) }
         })
         .fullScreenCover(item: $viewer) { request in
             MediaViewer(items: request.items, startID: request.id, shared: shared, album: album, onChange: onChange)
+                .zoomTransition(sourceID: request.id, in: zoomNamespace)
         }
     }
     private func sectionView(_ section: GridSection, minor: Bool) -> some View {
@@ -134,6 +139,7 @@ struct PhotoGrid<Header: View>: View {
         let selected = selection?.contains(item.id) == true
         return ThumbnailView(source: item.thumbnailSource, shared: shared, size: columns <= 3 ? .m : .sm, fallbackPhoto: item)
             .aspectRatio(1, contentMode: .fit)
+            .zoomSource(id: item.id, in: zoomNamespace)
             .overlay { TileBadges(item: item, favorite: favorites.ids.contains(item.id), compact: columns >= 6) }
             .scaleEffect(selected ? 0.86 : 1)
             .overlay(alignment: .topLeading) {

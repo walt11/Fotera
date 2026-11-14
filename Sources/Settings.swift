@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("alwaysLoadOriginals") private var alwaysLoadOriginals = false
     @AppStorage("widgetMemories") private var widgetMemories = true
+    @AppStorage("appLock") private var appLock = false
+    @AppStorage("videoQuality") private var videoQuality = VideoQuality.fast.rawValue
     @AppStorage("appearance") private var appearance = AppearanceSetting.dark.rawValue
     @State private var cacheSize: Int?
     @State private var signingOut = false
@@ -25,6 +27,7 @@ struct SettingsView: View {
                         }
                     }.padding(.vertical, 4)
                 }
+                AccountsSection()
                 Section {
                     NavigationLink { BackupView(backup: backup) } label: {
                         LabeledContent { Text(backup.preferences.enabled ? backup.status : "Off").lineLimit(1) } label: {
@@ -41,6 +44,10 @@ struct SettingsView: View {
                         ForEach(AppearanceSetting.allCases) { Text($0.rawValue).tag($0.rawValue) }
                     }
                     Toggle("Always load originals", isOn: $alwaysLoadOriginals)
+                    Toggle("Lock with Face ID", isOn: $appLock)
+                    Picker("Video quality", selection: $videoQuality) {
+                        ForEach(VideoQuality.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                    }
                 } header: { Text("Viewing") } footer: {
                     Text("When off, Fotera shows the NAS’s high-quality preview and downloads the original only when you zoom in, share or save.")
                 }

@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import UserNotifications
 
 /// The response of a background upload, persisted so it survives app termination.
 struct UploadReceipt: Codable {
@@ -145,6 +146,7 @@ final class FoteraApplicationDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         BackupScheduler.register()
         _ = BackgroundUploads.shared
+        UNUserNotificationCenter.current().delegate = NotificationRouter.shared
         return true
     }
     /// iOS relaunches Fotera when background uploads finish. Use the time to reconcile results and

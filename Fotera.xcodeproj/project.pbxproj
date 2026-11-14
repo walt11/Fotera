@@ -37,6 +37,16 @@
 		0000000000000000000F0002 = {isa = PBXBuildFile; fileRef = 0000000000000000000F0001; };
 000000000000000000100002 = {isa = PBXBuildFile; fileRef = 000000000000000000100001; };
 		000000000000000000110002 /* Sources/Design.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000110001 /* Sources/Design.swift */; };
+		000000000000000000110011 /* Sources/BackupExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000110010 /* Sources/BackupExtras.swift */; };
+		000000000000000000110013 /* Sources/Accounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000110012 /* Sources/Accounts.swift */; };
+		000000000000000000110021 /* Sources/Discovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000110020 /* Sources/Discovery.swift */; };
+		000000000000000000110023 /* Sources/Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000110022 /* Sources/Intents.swift */; };
+		000000000000000000120004 /* Share/ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000120001 /* Share/ShareViewController.swift */; };
+		000000000000000000120005 /* Sources/ShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000120002 /* Sources/ShareInbox.swift */; };
+		000000000000000000120006 /* Sources/ShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000120002 /* Sources/ShareInbox.swift */; };
+		000000000000000000120007 /* FoteraShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 000000000000000000120003 /* FoteraShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		00000000000000000012000F /* Sources/WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000B01 /* Sources/WidgetSnapshot.swift */; };
+		000000000000000000130003 /* Tests/FoteraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000130001 /* Tests/FoteraTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +56,20 @@
 			proxyType = 1;
 			remoteGlobalIDString = 000000000000000000000B10;
 			remoteInfo = FoteraMemories;
+		};
+		00000000000000000012000D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000120009;
+			remoteInfo = FoteraShare;
+		};
+		00000000000000000013000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000004;
+			remoteInfo = Fotera;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -57,6 +81,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				000000000000000000000B07 /* FoteraMemories.appex in Embed App Extensions */,
+				000000000000000000120007 /* FoteraShare.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -92,6 +117,15 @@
 		0000000000000000000F0001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ConnectionResolver.swift; sourceTree = "<group>"; };
 000000000000000000100001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LibraryFeatures.swift; sourceTree = "<group>"; };
 		000000000000000000110001 /* Sources/Design.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Design.swift; sourceTree = "<group>"; };
+		000000000000000000110010 /* Sources/BackupExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/BackupExtras.swift; sourceTree = "<group>"; };
+		000000000000000000110012 /* Sources/Accounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Accounts.swift; sourceTree = "<group>"; };
+		000000000000000000110020 /* Sources/Discovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Discovery.swift; sourceTree = "<group>"; };
+		000000000000000000110022 /* Sources/Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Intents.swift; sourceTree = "<group>"; };
+		000000000000000000120001 /* Share/ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Share/ShareViewController.swift; sourceTree = "<group>"; };
+		000000000000000000120002 /* Sources/ShareInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ShareInbox.swift; sourceTree = "<group>"; };
+		000000000000000000120003 /* FoteraShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = FoteraShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000130001 /* Tests/FoteraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/FoteraTests.swift; sourceTree = "<group>"; };
+		000000000000000000130002 /* FoteraTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = FoteraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +134,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000C03 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000130005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -115,6 +156,15 @@
 				0000000000000000000E0004,
 				0000000000000000000E0001,
 				000000000000000000000C05 /* Sources/OriginalPackage.swift */,
+				000000000000000000130001 /* Tests/FoteraTests.swift */,
+				000000000000000000130002 /* FoteraTests.xctest */,
+				000000000000000000120001 /* Share/ShareViewController.swift */,
+				000000000000000000120002 /* Sources/ShareInbox.swift */,
+				000000000000000000120003 /* FoteraShare.appex */,
+				000000000000000000110022 /* Sources/Intents.swift */,
+				000000000000000000110020 /* Sources/Discovery.swift */,
+				000000000000000000110012 /* Sources/Accounts.swift */,
+				000000000000000000110010 /* Sources/BackupExtras.swift */,
 				000000000000000000110001 /* Sources/Design.swift */,
 				0000000000000000000D0001 /* Sources/Thumbnails.swift */,
 				0000000000000000000D0003 /* Sources/LibraryStore.swift */,
@@ -156,6 +206,7 @@
 			);
 			dependencies = (
 				000000000000000000000B15 /* PBXTargetDependency */,
+				00000000000000000012000E /* PBXTargetDependency */,
 			);
 			name = Fotera;
 			packageProductDependencies = (
@@ -180,6 +231,38 @@
 			productReference = 000000000000000000000B06 /* FoteraMemories.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		000000000000000000120009 /* FoteraShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00000000000000000012000A /* Build configuration list for PBXNativeTarget "FoteraShare" */;
+			buildPhases = (
+				000000000000000000120008 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FoteraShare;
+			productName = FoteraShare;
+			productReference = 000000000000000000120003 /* FoteraShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		000000000000000000130006 /* FoteraTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000130007 /* Build configuration list for PBXNativeTarget "FoteraTests" */;
+			buildPhases = (
+				000000000000000000130004 /* Sources */,
+				000000000000000000130005 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				00000000000000000013000B /* PBXTargetDependency */,
+			);
+			name = FoteraTests;
+			productName = FoteraTests;
+			productReference = 000000000000000000130002 /* FoteraTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -189,6 +272,14 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					000000000000000000000004 = {
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+					000000000000000000120009 = {
+						DevelopmentTeam = 76BJCJ4Q7X;
 						SystemCapabilities = {
 							com.apple.ApplicationGroups.iOS = {
 								enabled = 1;
@@ -222,6 +313,8 @@
 			targets = (
 				000000000000000000000004 /* Fotera */,
 				000000000000000000000B10 /* FoteraMemories */,
+				000000000000000000130006 /* FoteraTests */,
+				000000000000000000120009 /* FoteraShare */,
 			);
 		};
 /* End PBXProject section */
@@ -247,6 +340,11 @@
 				0000000000000000000E0002,
 				0000000000000000000E0005,
 				000000000000000000000C06 /* Sources/OriginalPackage.swift in Sources */,
+				000000000000000000120006 /* Sources/ShareInbox.swift in Sources */,
+				000000000000000000110023 /* Sources/Intents.swift in Sources */,
+				000000000000000000110021 /* Sources/Discovery.swift in Sources */,
+				000000000000000000110013 /* Sources/Accounts.swift in Sources */,
+				000000000000000000110011 /* Sources/BackupExtras.swift in Sources */,
 				000000000000000000110002 /* Sources/Design.swift in Sources */,
 				0000000000000000000D0002 /* Sources/Thumbnails.swift in Sources */,
 				0000000000000000000D0004 /* Sources/LibraryStore.swift in Sources */,
@@ -279,6 +377,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		000000000000000000120008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000120004 /* Share/ShareViewController.swift in Sources */,
+				000000000000000000120005 /* Sources/ShareInbox.swift in Sources */,
+				00000000000000000012000F /* Sources/WidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000130004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000130003 /* Tests/FoteraTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -287,12 +403,26 @@
 			target = 000000000000000000000B10 /* FoteraMemories */;
 			targetProxy = 000000000000000000000B14 /* PBXContainerItemProxy */;
 		};
+		00000000000000000012000E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000120009 /* FoteraShare */;
+			targetProxy = 00000000000000000012000D /* PBXContainerItemProxy */;
+		};
+		00000000000000000013000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000004 /* Fotera */;
+			targetProxy = 00000000000000000013000A /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0000000000000000000000C8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ONLY_ACTIVE_ARCH = YES;
+				ENABLE_TESTABILITY = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				GCC_OPTIMIZATION_LEVEL = 0;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -420,6 +550,95 @@
 			};
 			name = Release;
 		};
+		00000000000000000012000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Share/Device.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Share/Simulator.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Share/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Fotera;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Share;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = net.jwalter.PhotoHarbor.Share;
+				PRODUCT_NAME = FoteraShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		00000000000000000012000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Share/Device.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Share/Simulator.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Share/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Fotera;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Share;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = net.jwalter.PhotoHarbor.Share;
+				PRODUCT_NAME = FoteraShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		000000000000000000130008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Tests;
+				PRODUCT_NAME = FoteraTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Fotera.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Fotera";
+			};
+			name = Debug;
+		};
+		000000000000000000130009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Tests;
+				PRODUCT_NAME = FoteraTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Fotera.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Fotera";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -446,6 +665,24 @@
 			buildConfigurations = (
 				000000000000000000000B12 /* Debug */,
 				000000000000000000000B13 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		00000000000000000012000A /* Build configuration list for PBXNativeTarget "FoteraShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00000000000000000012000B /* Debug */,
+				00000000000000000012000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000130007 /* Build configuration list for PBXNativeTarget "FoteraTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000130008 /* Debug */,
+				000000000000000000130009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

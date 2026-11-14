@@ -19,6 +19,12 @@ import WidgetKit
     @Published private(set) var shared = false
     @Published var notice: String?
     @Published private(set) var staysSignedIn = false
+    /// The session expired and needs a password; shown as a sheet over the current screen.
+    @Published var reauthRequired = false
+    /// Covers the app until Face ID / passcode succeeds (Settings → Lock with Face ID).
+    @Published var locked = UserDefaults.standard.bool(forKey: "appLock")
+    /// While adding another account, the account to return to if the user cancels.
+    @Published private(set) var addingAccount: AccountRef?
     let library = LibraryStore()
     @AppStorage("serverAddress") var address = ""
     @AppStorage("accountName") var username = ""
@@ -29,6 +35,7 @@ import WidgetKit
     var manualUploads: TransferQueue { TransferQueue.shared(account: account) }
 
     init() {
+        ShareInbox.migrateSettings()
         observer = NotificationCenter.default.addObserver(forName: .foteraSessionExpired, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sessionExpired() }
         }
@@ -37,6 +44,7 @@ import WidgetKit
         guard phase == .launching else { return }
         guard let saved = try? SessionStore.load(), let connection = try? await DSMClient.open(address: saved.address, cachedEndpoint: saved.resolvedAddress) else { phase = .signedOut; return }
         address = connection.address; username = saved.username
+        AccountStore.add(AccountRef(address: connection.address, username: saved.username))
         do {
             try await connection.restore(saved, credentials: CredentialStore.load())
             staysSignedIn = await connection.keepsCredentials
@@ -57,8 +65,55 @@ import WidgetKit
         try await connection.signIn(username: username, password: password, otp: otp, remember: remember)
         self.address = connection.address; self.username = username
         staysSignedIn = remember
-        notice = nil
+        notice = nil; addingAccount = nil
+        AccountStore.add(AccountRef(address: connection.address, username: username))
         await activate(connection)
+    }
+    /// Renews an expired session in place, keeping the current screen.
+    func renewSession(password: String, otp: String, remember: Bool) async throws {
+        guard let client else { throw ConnectionError.signedOut }
+        try await client.signIn(username: username, password: password, otp: otp, remember: remember)
+        staysSignedIn = remember
+        reauthRequired = false; notice = nil
+        library.refresh()
+        BackupController.shared.start()
+    }
+    /// Parks the current account and opens the sign-in screen for another one.
+    func beginAddingAccount() async {
+        let current = AccountRef(address: address, username: username)
+        await deactivate()
+        AccountVault.park(current)
+        addingAccount = current
+        phase = .signedOut
+    }
+    func cancelAddingAccount() async {
+        guard let previous = addingAccount else { return }
+        addingAccount = nil
+        AccountVault.unpark(previous)
+        phase = .launching
+        await restore()
+    }
+    func switchAccount(to target: AccountRef) async {
+        let current = AccountRef(address: address, username: username)
+        guard target != current else { return }
+        await deactivate()
+        AccountVault.park(current)
+        guard AccountVault.unpark(target) else {
+            AccountVault.unpark(current)
+            AccountStore.remove(target)
+            notice = "That account’s sign-in was no longer saved. Add it again."
+            phase = .launching; await restore(); return
+        }
+        phase = .launching
+        await restore()
+    }
+    /// Stops using the current client without signing it out on the NAS.
+    private func deactivate() async {
+        BackupController.shared.detach()
+        TransferQueue.flushAll()
+        ImagePipeline.shared.configure(client: nil, account: "")
+        client = nil; shared = false; reauthRequired = false
+        await library.attach(client: nil, account: "", shared: false)
     }
     private func activate(_ connection: DSMClient) async {
         client = connection
@@ -79,6 +134,8 @@ import WidgetKit
     }
     func signOut() async {
         let connection = client
+        AccountStore.remove(AccountRef(address: address, username: username))
+        reauthRequired = false
         BackupController.shared.detach()
         await manualUploads.cancelUploads()
         await BackgroundUploads.shared.cancelAll()
@@ -92,30 +149,57 @@ import WidgetKit
         await library.attach(client: nil, account: "", shared: false)
         phase = .signedOut
         await connection?.disconnect()
+        // Continue with another signed-in account if there is one.
+        if let next = AccountStore.all.first, AccountVault.unpark(next) {
+            phase = .launching
+            await restore()
+        }
     }
     func forgetCredentials() async throws {
         if let client { try await client.forgetCredentials() }
         else { try CredentialStore.clear() }
         staysSignedIn = false
     }
+    /// Asks for the password in a sheet instead of returning to the login screen.
     private func sessionExpired() {
-        guard phase == .signedIn, !staysSignedIn else { return }
-        try? SessionStore.clear()
-        BackupController.shared.detach()
-        client = nil
-        ImagePipeline.shared.configure(client: nil, account: account)
-        notice = "Your session expired. Sign in again."
-        phase = .signedOut
+        guard phase == .signedIn, client != nil, !reauthRequired else { return }
+        BackupController.shared.pause()
+        reauthRequired = true
     }
     func becameActive() {
         guard let client else { return }
         library.refreshIfStale()
         BackupController.shared.start()
+        Task { await importShared() }
         if !manualUploads.pending.isEmpty { manualUploads.start(client: client, wifiOnly: false) }
+    }
+    private var importingShared = false
+    /// Queues files shared from other apps ("Upload to Fotera") into Upload to NAS.
+    func importShared() async {
+        guard !importingShared else { return }
+        importingShared = true
+        defer { importingShared = false }
+        let files = ShareInbox.pending()
+        guard !files.isEmpty, let client else { return }
+        let folder = ShareInbox.uploadFolder
+        guard !folder.isEmpty else {
+            notice = "\(files.count) shared \(files.count == 1 ? "item is" : "items are") waiting. Choose a folder in Library → ⋯ → Upload to NAS."
+            return
+        }
+        var added = 0
+        for file in files {
+            do {
+                try await manualUploads.enqueue(file, filename: file.lastPathComponent, folder: folder, shared: ShareInbox.uploadShared, move: true)
+                ShareInbox.remove(file); added += 1
+            } catch { notice = "Couldn’t queue a shared file: " + error.localizedDescription }
+        }
+        if added > 0 { manualUploads.start(client: client, wifiOnly: false) }
     }
     /// Before suspension, hand queued uploads to iOS so they continue in the background.
     func enteredBackground() {
         TransferQueue.flushAll()
+        // Lock before iOS takes the app-switcher snapshot.
+        if UserDefaults.standard.bool(forKey: "appLock") { locked = true }
         guard BackupController.shared.preferences.enabled, client != nil, !BackupScheduler.hasContinuedBackup else { return }
         final class Token { var id = UIBackgroundTaskIdentifier.invalid }
         let token = Token()
@@ -133,7 +217,7 @@ import WidgetKit
             backup.pause()
             await backup.waitUntilIdle()
             guard !Task.isCancelled else { return }
-            await backup.run(deadline: Date().addingTimeInterval(25), background: true)
+            await backup.run(deadline: Date().addingTimeInterval(25), background: true, trigger: "suspend")
             BackupScheduler.schedule(backup.preferences)
             if token.id != .invalid { UIApplication.shared.endBackgroundTask(token.id); token.id = .invalid }
         }
@@ -154,6 +238,11 @@ struct RootView: View {
             }
         }
         .animation(.default, value: app.phase)
+        .onChange(of: app.locked, initial: true) { _, locked in LockWindow.shared.update(locked: locked, app: app) }
+        .sheet(isPresented: $app.reauthRequired) { ReauthSheet() }
+        .onReceive(NotificationCenter.default.publisher(for: .foteraOpenURL)) { note in
+            if let url = note.object as? URL, url.host == "backup", app.client != nil { activityBackup = true }
+        }
         .preferredColorScheme((AppearanceSetting(rawValue: appearance) ?? .dark).scheme)
         .task {
             await app.restore()
@@ -172,7 +261,9 @@ struct RootView: View {
             #endif
         }
         .onOpenURL { url in
-            if url.scheme == "fotera", url.host == "backup", app.client != nil { activityBackup = true }
+            guard url.scheme == "fotera" else { return }
+            if url.host == "backup", app.client != nil { activityBackup = true }
+            else { NotificationCenter.default.post(name: .foteraOpenURL, object: url) }
         }
         .sheet(isPresented: $activityBackup) {
             NavigationStack {
@@ -199,6 +290,7 @@ struct MainTabs: View {
             LibraryTab(library: app.library)
                 .tabItem { Label("Library", systemImage: "rectangle.stack") }.tag(2)
         }
+        .adaptiveTabs()
     }
 }
 
@@ -249,6 +341,9 @@ struct LoginView: View {
                     }
                     Toggle("Stay signed in", isOn: $remember).padding(.horizontal, 4).padding(.top, 4)
                 }
+                if app.addingAccount != nil {
+                    Button("Cancel and go back") { Task { await app.cancelAddingAccount() } }
+                }
                 if let message = failure ?? app.notice {
                     Text(message).font(.footnote).foregroundStyle(failure == nil ? Color.secondary : Color.red).multilineTextAlignment(.center)
                 }
@@ -278,8 +373,8 @@ struct LoginView: View {
             }
         }
         .onAppear {
-            address = app.address.isEmpty ? "https://" : app.address
-            username = app.username
+            address = app.addingAccount != nil ? "https://" : (app.address.isEmpty ? "https://" : app.address)
+            username = app.addingAccount != nil ? "" : app.username
         }
     }
     private func field(_ label: String, _ prompt: String, text: Binding<String>, field: Field) -> some View {
@@ -378,6 +473,9 @@ struct PhotosTab: View {
                     }
                 }
                 .onChange(of: grouping) { library.grouping = TimelineGrouping(rawValue: grouping) ?? .day }
+                .onReceive(NotificationCenter.default.publisher(for: .foteraOpenURL)) { note in
+                    if (note.object as? URL)?.host == "memories", let first = library.memories.first { memory = first }
+                }
         }
     }
     @ViewBuilder private var content: some View {

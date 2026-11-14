@@ -24,6 +24,26 @@ import ImageIO
                 UserDefaults.standard.set(arguments[index + 2], forKey: "accountName")
                 record("REPAIRED"); record("FINISHED"); return
             }
+            if ProcessInfo.processInfo.arguments.contains("--similar-probe") {
+                let probes: [(String, Int, String, [String: String])] = [
+                    ("SYNO.Foto.Browse.Similar", 1, "get", ["id": "1229"]),
+                    ("SYNO.Foto.Browse.Similar", 1, "get", ["id": "1229", "additional": "[\"thumbnail\"]"]),
+                    ("SYNO.Foto.Browse.SimilarItem", 2, "list", ["offset": "0", "limit": "500"]),
+                    ("SYNO.Foto.Browse.Similar", 1, "get", [:]),
+                    ("SYNO.Foto.Browse.SimilarItem", 1, "list", ["offset": "0", "limit": "5", "additional": "[\"thumbnail\"]"]),
+                    ("SYNO.Foto.Browse.SimilarItem", 2, "list", ["offset": "0", "limit": "5", "additional": "[\"thumbnail\"]"]),
+                    ("SYNO.Foto.Browse.SimilarTimeline", 1, "get", [:]),
+                    ("SYNO.Foto.Browse.SimilarTimeline", 2, "get", [:]),
+                    ("SYNO.Foto.Browse.SimilarTimeline", 2, "list", ["offset": "0", "limit": "5"]),
+                    ("SYNO.Foto.Setting.User", 1, "get", [:]),
+                    ("SYNO.Foto.Sharing.Misc", 2, "list_shared_with_me_album", ["offset": "0", "limit": "5", "additional": "[\"thumbnail\"]"]),
+                ]
+                for (api, version, method, fields) in probes {
+                    do { record("\(api) v\(version) \(method): " + String((try await client.featureContract(api, method: method, version: version, fields: fields)).prefix(700))) }
+                    catch { record("\(api) v\(version) \(method): ERROR \(error)") }
+                }
+                record("FINISHED"); return
+            }
             if ProcessInfo.processInfo.arguments.contains("--recycle-probe") {
                 record("ADMIN: " + String((try await client.featureContract("SYNO.Foto.Setting.Admin", method: "get")).prefix(1500)))
                 record("FINISHED"); return

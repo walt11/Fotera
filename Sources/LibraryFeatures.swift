@@ -354,10 +354,12 @@ struct SharedWithMeView: View {
     @State private var albums: [SharedPhotoAlbum] = []; @State private var failure: String?; @State private var base: URL?
     var body: some View {
         List {
-            Text("Shared albums open in Synology’s shared-album viewer, with the owner’s access permissions.").font(.footnote).foregroundStyle(.secondary)
+            Text("Albums other people share with you, shown with the owner’s permissions.").font(.footnote).foregroundStyle(.secondary)
             ForEach(albums) { album in
-                if let token = album.passphrase, !token.isEmpty, let base {
-                    Link(destination: base.appendingPathComponent("mo/sharing").appendingPathComponent(token)) { Label(album.name, systemImage: "person.2") }
+                if let token = album.passphrase, !token.isEmpty {
+                    NavigationLink { SharedAlbumView(album: album) } label: {
+                        LabeledContent { if let count = album.item_count { Text("\(count)") } } label: { Label(album.name, systemImage: "person.2") }
+                    }
                 } else { Text(album.name) }
             }
             if albums.isEmpty && failure == nil { Text("No albums shared with you") }

@@ -119,3 +119,15 @@ Swipe gestures, the memory story, the backup progress line and search suggestion
 - **Viewer** uses the synced favorites list instead of asking the NAS on every swipe. **Search** caches people, places and things for 5 minutes per space (pull to refresh forces a reload). **Grid** prefetches the next two rows of thumbnails through a separate low-priority limiter.
 
 Verification: simulator and device builds pass; the streamed fingerprint matches a whole-file SHA-256; the cached timeline renders with off-main builds. The simulator's NAS session expired during this pass (DSM 119, no saved password), so the quick sync check, catalog reuse and streamed export weren't exercised against the NAS.
+
+## Feature batch (November 13, evening)
+
+Added: Git history, an XCTest target (15 tests) with a shared scheme, re-sign-in sheet, backup notifications, backup history log, Free up space, duplicate finder (local exact/burst groups plus the NAS's `Browse.SimilarItem` list grouped by capture time), Recently added (`Browse.RecentlyAdded`), in-app shared-album browsing via share token, video quality setting, share extension (`FoteraShare`) with an App Group inbox, Face ID lock in a top-level window, iPad sidebar and wider grids, App Intents (Back Up Now, Upload Latest Photo, Show Memories), multiple accounts (Keychain slots per account), zoom transition from grid to viewer (iOS 18+), haptics, and an accessibility pass.
+
+Also fixed: the project's Debug configuration lacked Xcode's standard settings (`ONLY_ACTIVE_ARCH`, `ENABLE_TESTABILITY`, `-Onone`), so Debug builds were optimized and couldn't be unit-tested.
+
+Review fixes before commit: Free up space now requires edited renderings to be verified for edited photos; offline renewal failures no longer prompt for a password; the Face ID lock covers open sheets; shared-file import can't run twice concurrently.
+
+Verified: unit tests pass on the simulator; NAS probes on the iPhone confirmed `SimilarItem.list` and `SimilarTimeline.get`. Not verified against the NAS: shared-album token browsing (no albums are shared with this account), `Similar.get` grouping, multiple accounts, the share extension on a device (needs an App ID with App Groups; see below), and the new flows by touch.
+
+Device signing: the share extension needs App ID `net.jwalter.PhotoHarbor.Share` with the `group.net.jwalter.Fotera` App Group. Xcode registers it automatically once an Apple account is added in Xcode → Settings → Accounts and the project is built for a device once.

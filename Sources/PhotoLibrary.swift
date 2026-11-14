@@ -35,6 +35,8 @@ struct RemotePhoto: Codable, Identifiable, Sendable, Hashable {
     var additional: Additional?
     var filesize: Int64?
     var folder_id: Int?
+    /// Share token for items browsed through an album shared with you (not part of the NAS response).
+    var passphrase: String?
 
     struct Additional: Codable, Sendable, Hashable {
         var thumbnail: Thumbnail?
@@ -63,7 +65,7 @@ struct RemotePhoto: Codable, Identifiable, Sendable, Hashable {
                                : String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
     var thumbnailSource: ThumbnailSource? {
-        additional?.thumbnail.map { ThumbnailSource(id: $0.unit_id ?? id, cacheKey: $0.cache_key, kind: "unit") }
+        additional?.thumbnail.map { ThumbnailSource(id: $0.unit_id ?? id, cacheKey: $0.cache_key, kind: "unit", passphrase: passphrase) }
     }
     static func == (lhs: RemotePhoto, rhs: RemotePhoto) -> Bool {
         lhs.id == rhs.id && lhs.additional?.thumbnail?.cache_key == rhs.additional?.thumbnail?.cache_key
@@ -76,6 +78,8 @@ struct ThumbnailSource: Hashable, Sendable {
     let id: Int
     let cacheKey: String
     let kind: String
+    /// Set for items in an album someone shared with you; previews are fetched with its share token.
+    var passphrase: String? = nil
 }
 
 struct CoverThumbnail: Codable, Hashable, Sendable {

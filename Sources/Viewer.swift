@@ -373,7 +373,8 @@ struct MediaPage: View {
         defer { working = false }
         do {
             var asset: AVURLAsset?
-            if let url = try? await client.streamingURL(id: item.id, shared: shared) {
+            // Settings → Video quality decides between the NAS's smaller stream and the original.
+            if VideoQuality.current.prefersStream, let url = try? await client.streamingURL(id: item.id, shared: shared) {
                 let candidate = AVURLAsset(url: url)
                 if (try? await withTimeout(8) { try await candidate.load(.isPlayable) }) == true { asset = candidate }
             }

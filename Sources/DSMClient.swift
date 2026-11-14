@@ -279,7 +279,8 @@ actor DSMClient {
         defer { reauthTask = nil }
         do { try await task.value }
         catch {
-            await MainActor.run { NotificationCenter.default.post(name: .foteraSessionExpired, object: nil) }
+            // Only a rejected password needs the user; network failures just retry later.
+            if error is AuthError { await MainActor.run { NotificationCenter.default.post(name: .foteraSessionExpired, object: nil) } }
             throw error
         }
     }
@@ -383,6 +384,36 @@ actor DSMClient {
         else { fields["additional"] = "[\"thumbnail\"]" }
         return try await call(api, version, "list", fields, as: Page.self).list
     }
+    /// Newest uploads first, regardless of capture date (finds old photos you just added).
+    func recentlyAdded(shared: Bool, offset: Int, limit: Int = 100) async throws -> [RemotePhoto] {
+        struct Page: Decodable { let list: [RemotePhoto] }
+        return try await call(space(shared, "Browse.RecentlyAdded"), 1, "list", ["offset": String(offset), "limit": String(limit),
+            "additional": "[\"thumbnail\"]"], as: Page.self).list
+    }
+    /// Photos Synology Photos considers visually similar to another photo (its "Similar photos" feature).
+    /// The list carries no group IDs, so callers group them by capture time.
+    func similarItems(shared: Bool) async throws -> [RemotePhoto] {
+        struct Page: Decodable { let list: [RemotePhoto] }
+        var result: [RemotePhoto] = []; var offset = 0
+        while true {
+            let page = try await call(space(shared, "Browse.SimilarItem"), 2, "list", ["offset": String(offset), "limit": "500",
+                "additional": "[\"thumbnail\"]"], as: Page.self).list
+            result += page; offset += page.count
+            if page.count < 500 { return result }
+        }
+    }
+    /// Items of an album shared with you, read with its share token.
+    func sharedAlbumItems(passphrase: String) async throws -> [RemotePhoto] {
+        struct Page: Decodable { let list: [RemotePhoto] }
+        var result: [RemotePhoto] = []; var offset = 0
+        while true {
+            let page = try await call("SYNO.Foto.Browse.Item", 1, "list", ["passphrase": passphrase, "offset": String(offset),
+                "limit": "500", "additional": "[\"thumbnail\"]"], as: Page.self).list
+            result += page.map { var item = $0; item.passphrase = passphrase; return item }
+            offset += page.count
+            if page.count < 500 { return result }
+        }
+    }
     func count(shared: Bool) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await call(space(shared, "Browse.Item"), 1, "count", as: Count.self).count
@@ -446,8 +477,10 @@ actor DSMClient {
         let api = space(shared, "Thumbnail")
         return try await authorized { sid in
             let info = try self.info(api, 1)
-            let data = try await self.send(info.path, ["api": api, "version": "1", "method": "get", "_sid": sid,
-                "id": String(source.id), "cache_key": source.cacheKey, "type": source.kind, "size": size.rawValue])
+            var fields = ["api": api, "version": "1", "method": "get", "_sid": sid,
+                "id": String(source.id), "cache_key": source.cacheKey, "type": source.kind, "size": size.rawValue]
+            if let passphrase = source.passphrase { fields["passphrase"] = passphrase }
+            let data = try await self.send(info.path, fields)
             if data.first == UInt8(ascii: "{") {
                 let failure = try? JSONDecoder().decode(Envelope<EmptyPayload>.self, from: data)
                 throw ConnectionError.server(failure?.error?.code ?? -1)
@@ -755,23 +788,25 @@ struct Credentials: Codable {
     var password: String
     var deviceID: String?
 }
-private enum Keychain {
-    static func query(_ service: String) -> [String: Any] {
+/// Keychain items are keyed by service and slot. "active" holds the signed-in account; other
+/// signed-in accounts are parked in their own slots (see AccountVault).
+enum Keychain {
+    static func query(_ service: String, slot: String = "active") -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "PhotoHarbor") + service,
-         kSecAttrAccount as String: "active"]
+         kSecAttrAccount as String: slot]
     }
-    static func save(_ data: Data, service: String, background: Bool) throws {
+    static func save(_ data: Data, service: String, background: Bool, slot: String = "active") throws {
         let attributes: [String: Any] = [kSecValueData as String: data,
             kSecAttrAccessible as String: background ? kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly : kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
-        var status = SecItemUpdate(query(service) as CFDictionary, attributes as CFDictionary)
+        var status = SecItemUpdate(query(service, slot: slot) as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
-            status = SecItemAdd(query(service).merging(attributes) { _, new in new } as CFDictionary, nil)
+            status = SecItemAdd(query(service, slot: slot).merging(attributes) { _, new in new } as CFDictionary, nil)
         }
         guard status == errSecSuccess else { throw StorageError(status: status) }
     }
-    static func load(service: String) throws -> Data? {
-        var lookup = query(service)
+    static func load(service: String, slot: String = "active") throws -> Data? {
+        var lookup = query(service, slot: slot)
         lookup[kSecReturnData as String] = true
         lookup[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -780,8 +815,8 @@ private enum Keychain {
         guard status == errSecSuccess, let data = result as? Data else { throw StorageError(status: status) }
         return data
     }
-    static func clear(service: String) throws {
-        let status = SecItemDelete(query(service) as CFDictionary)
+    static func clear(service: String, slot: String = "active") throws {
+        let status = SecItemDelete(query(service, slot: slot) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw StorageError(status: status) }
     }
 }
