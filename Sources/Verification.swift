@@ -105,9 +105,18 @@ import ImageIO
                 record("route: \(base.absoluteString)")
                 if ProcessInfo.processInfo.arguments.contains("--local-probe") {
                     record("photos access: \(LocalAssets.allowed)")
+                    let recent = try await client.recentlyAdded(shared: false, offset: 0, limit: 10)
+                    record("recently added: " + recent.map { "\($0.filename) \($0.date.map { PhotoTime.format($0, .dateTime.month().day().year()) } ?? "")" }.joined(separator: ", "))
+                    for offset in stride(from: 0, to: 1000, by: 500) {
+                        let chunk = try await client.items(.all, shared: false, offset: offset, withLocation: true)
+                        if chunk.isEmpty { break }
+                        var hits = 0; let t0 = Date()
+                        for item in chunk { if await LocalAssets.shared.identifier(for: item) != nil { hits += 1 } }
+                        record("offset \(offset): first \(chunk.first?.filename ?? "") \(chunk.first?.date.map { PhotoTime.format($0, .dateTime.month().day().year()) } ?? ""), local \(hits)/\(chunk.count) in \(ms(t0))")
+                    }
                     var found = 0; let t = Date()
-                    for item in page.prefix(60) { if await LocalAssets.shared.identifier(for: item) != nil { found += 1 } }
-                    record("local copies: \(found) of \(min(60, page.count)) in \(ms(t))")
+                    for item in page { if await LocalAssets.shared.identifier(for: item) != nil { found += 1 } }
+                    record("local copies: \(found) of \(page.count) in \(ms(t))")
                     if let item = page.first(where: { $0.isLive }), let local = await LocalCopy.asset(item) {
                         let t2 = Date(); let photo = await LocalCopy.livePhoto(local); record("local live \(item.filename): \(photo != nil) in \(ms(t2))")
                     }

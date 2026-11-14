@@ -142,6 +142,7 @@ struct TileBadges: View {
                     .padding(5)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
+            LocalAvailabilityBadge(item: item, compact: compact)
             if favorite {
                 Image(systemName: "heart.fill").font(.system(size: compact ? 8 : 10, weight: .bold))
                     .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2)

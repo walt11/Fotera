@@ -288,6 +288,9 @@ struct PagerView<Page: View>: UIViewControllerRepresentable {
 actor LocalAssets {
     static let shared = LocalAssets()
     private var matches: [String: String?] = [:]
+    /// Capture times (whole seconds) of every photo on the phone, to rule out most NAS-only items cheaply.
+    private var times: Set<Int>?
+    private var observer: LocalLibraryObserver?
     nonisolated static var allowed: Bool {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         return status == .authorized || status == .limited
@@ -296,11 +299,32 @@ actor LocalAssets {
         guard Self.allowed, item.passphrase == nil, let time = item.time else { return nil }
         let key = "\(item.id)|\(item.additional?.thumbnail?.cache_key ?? "")"
         if let known = matches[key] { return known }
+        // A grid cell that scrolled away no longer needs an answer.
+        guard !Task.isCancelled else { return nil }
+        guard mayBeLocal(time) else { matches[key] = .some(nil); return nil }
         let found = Self.find(item, time: time)
         matches[key] = .some(found)
         return found
     }
-    func clear() { matches = [:] }
+    func clear() { matches = [:]; times = nil }
+    private func mayBeLocal(_ time: Double) -> Bool {
+        let set = localTimes(), base = Int(time.rounded())
+        for zone in -56...56 {
+            let t = base - zone * 900
+            if set.contains(t) || set.contains(t - 1) || set.contains(t + 1) { return true }
+        }
+        return false
+    }
+    private func localTimes() -> Set<Int> {
+        if let times { return times }
+        if observer == nil { observer = LocalLibraryObserver() }
+        var set = Set<Int>()
+        PHAsset.fetchAssets(with: nil).enumerateObjects { asset, _, _ in
+            if let date = asset.creationDate { set.insert(Int(date.timeIntervalSince1970.rounded())) }
+        }
+        times = set
+        return set
+    }
     private static func find(_ item: RemotePhoto, time: Double) -> String? {
         let wall = Date(timeIntervalSince1970: time)
         let options = PHFetchOptions()
@@ -323,6 +347,44 @@ actor LocalAssets {
         return result
     }
 }
+/// Forgets matches when photos are added to or removed from the phone, and refreshes the badges.
+final class LocalLibraryObserver: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
+    override init() { super.init(); PHPhotoLibrary.shared().register(self) }
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task {
+            await LocalAssets.shared.clear()
+            await MainActor.run { NotificationCenter.default.post(name: .foteraLocalLibraryChanged, object: nil) }
+        }
+    }
+}
+extension Notification.Name { static let foteraLocalLibraryChanged = Notification.Name("FoteraLocalLibraryChanged") }
+
+/// Immich-style marker on a grid tile: a cloud when the item is only on the NAS. Items also on this
+/// iPhone stay unmarked. Shows nothing without Photos access, since it can't tell.
+struct LocalAvailabilityBadge: View {
+    let item: RemotePhoto
+    let compact: Bool
+    @State private var onPhone: Bool?
+    @State private var revision = 0
+    var body: some View {
+        Group {
+            if onPhone == false {
+                Image(systemName: "cloud.fill").font(.system(size: compact ? 8 : 10, weight: .semibold))
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2)
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .accessibilityLabel("Only on NAS")
+            }
+        }
+        .task(id: "\(item.id)|\(revision)") {
+            guard LocalAssets.allowed, item.passphrase == nil else { onPhone = nil; return }
+            let found = await LocalAssets.shared.identifier(for: item) != nil
+            if !Task.isCancelled { onPhone = found }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .foteraLocalLibraryChanged)) { _ in revision += 1 }
+    }
+}
+
 /// Loads a local copy without touching iCloud; anything not fully on the phone falls back to the NAS.
 @MainActor enum LocalCopy {
     static func asset(_ item: RemotePhoto) async -> PHAsset? {
