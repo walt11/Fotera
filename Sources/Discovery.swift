@@ -223,7 +223,7 @@ enum VideoQuality: String, CaseIterable, Identifiable {
         switch self {
         case .fast: return "Streams the NAS’s smaller H.264 version so playback starts quickly."
         case .originalOnWiFi: return "Plays the full-quality original on Wi‑Fi and streams the smaller version on cellular."
-        case .original: return "Always downloads the original before playing. Uses more data."
+        case .original: return "Always streams the full-quality original. Uses more data."
         }
     }
     /// Whether to stream the NAS's converted version rather than download the original.

@@ -148,6 +148,7 @@ import WidgetKit
     /// Stops using the current client without signing it out on the NAS.
     private func deactivate() async {
         routeMonitorTask?.cancel(); routeMonitorTask = nil; activeConnection = ""
+        LivePhotoCache.shared.clear()
         pendingLogin = nil
         BackupController.shared.detach()
         TransferQueue.flushAll()
@@ -176,6 +177,7 @@ import WidgetKit
     }
     func signOut() async {
         routeMonitorTask?.cancel(); routeMonitorTask = nil; activeConnection = ""
+        LivePhotoCache.shared.clear()
         let connection = client
         AccountStore.remove(AccountRef(address: address, username: username))
         reauthRequired = false

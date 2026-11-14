@@ -34,7 +34,7 @@ struct UploadReceipt: Codable {
         guard let envelope = try? JSONDecoder().decode(Envelope<Result>.self, from: data) else { return .failed("The NAS returned an unexpected response.") }
         guard envelope.success else {
             let code = envelope.error?.code ?? -1
-            return [106, 107, 119].contains(code) ? .sessionExpired : .server(code)
+            return [106, 107, 119, 150].contains(code) ? .sessionExpired : .server(code)
         }
         guard let id = envelope.data?.id ?? envelope.data?.unit_id else { return .failed("The NAS didn’t return an item ID.") }
         return .uploaded(id)

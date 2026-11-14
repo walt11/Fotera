@@ -60,6 +60,11 @@ extension Notification.Name {
     func cached(_ source: ThumbnailSource, shared: Bool, size: ThumbnailSize) -> UIImage? {
         memory.object(forKey: key(source, shared, size) as NSString)
     }
+    /// The sharpest preview already in memory, so the viewer can show something immediately.
+    func bestCached(_ source: ThumbnailSource, shared: Bool) -> UIImage? {
+        for size in [ThumbnailSize.xl, .m, .sm] { if let image = cached(source, shared: shared, size: size) { return image } }
+        return nil
+    }
     func image(_ source: ThumbnailSource, shared: Bool, size: ThumbnailSize) async -> UIImage? {
         let key = key(source, shared, size)
         if let image = memory.object(forKey: key as NSString) { return image }

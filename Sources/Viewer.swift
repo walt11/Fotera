@@ -69,11 +69,17 @@ struct MediaViewer: View {
             guard slideshow else { return }
             if state.index + 1 < items.count { withAnimation { state.index += 1 } } else { slideshow = false; state.chromeVisible = true }
         }
-        .onChange(of: state.index) { state.currentID = current?.id; loadFavorite() }
+        .onChange(of: state.index) { state.currentID = current?.id; loadFavorite(); preloadNeighbors() }
         .task {
             loadFavorite()
             if DebugScreen.name == "info" { try? await Task.sleep(for: .seconds(1)); showingInfo = true }
         }
+    }
+    /// Loads the high-quality previews either side of the current item, so swiping is instant.
+    private func preloadNeighbors() {
+        let range = max(0, state.index - 2)...min(items.count - 1, state.index + 2)
+        let sources = range.filter { $0 != state.index }.compactMap { items[$0].thumbnailSource }
+        ImagePipeline.shared.prefetch(sources, shared: shared, size: .xl)
     }
     private func loadFavorite() {
         guard let current, state.favorites[current.id] == nil, let client = app.client else { return }
@@ -322,12 +328,17 @@ struct MediaPage: View {
             }
         }
         .task {
-            if let source = item.thumbnailSource { preview = await ImagePipeline.shared.image(source, shared: shared, size: .xl) }
+            // Show the grid thumbnail already in memory right away, then upgrade to the sharp preview.
+            if let source = item.thumbnailSource {
+                if preview == nil { preview = ImagePipeline.shared.bestCached(source, shared: shared) }
+                if let sharp = await ImagePipeline.shared.image(source, shared: shared, size: .xl) { preview = sharp }
+            }
             if preview == nil && !item.isVideo { loadOriginal() }
         }
         .task(id: state.currentID) {
             if isPageCurrent() {
-                try? await Task.sleep(for: .milliseconds(250))
+                // A short pause so swiping quickly past items doesn't start downloads for each.
+                try? await Task.sleep(for: .milliseconds(item.isVideo ? 80 : 300))
                 guard !Task.isCancelled else { return }
                 await activate()
             } else {
@@ -348,7 +359,10 @@ struct MediaPage: View {
     }
     private func activate() async {
         if item.isVideo { await startVideo() }
-        else if alwaysLoadOriginals { loadOriginal() }
+        else {
+            if item.isLive { requestLivePlayback() }   // Prepare the motion so press-and-hold plays at once.
+            if alwaysLoadOriginals { loadOriginal() }
+        }
     }
     private func loadOriginal() {
         guard full == nil, !loadingFull, !item.isVideo else { return }
@@ -365,7 +379,8 @@ struct MediaPage: View {
             }
         }
     }
-    /// Streams the server's H.264 rendition, falling back to downloading the original.
+    /// Streams the NAS's converted version or the original (the NAS serves byte ranges, so playback
+    /// starts without the whole file), and downloads the original only if neither can play.
     private func startVideo() async {
         if let player { player.play(); return }
         guard !working else { return }
@@ -377,6 +392,11 @@ struct MediaPage: View {
             if VideoQuality.current.prefersStream, let url = try? await client.streamingURL(id: item.id, shared: shared) {
                 let candidate = AVURLAsset(url: url)
                 if (try? await withTimeout(8) { try await candidate.load(.isPlayable) }) == true { asset = candidate }
+            }
+            // Original quality, or no converted version: stream the original before downloading all of it.
+            if asset == nil, let url = try? await client.originalStreamURL(item, shared: shared, albumID: albumID) {
+                let candidate = AVURLAsset(url: url, options: [AVURLAssetOverrideMIMETypeKey: Self.mimeType(item.filename)])
+                if (try? await withTimeout(6) { try await candidate.load(.isPlayable) }) == true { asset = candidate }
             }
             if asset == nil {
                 let file = try await client.original(item, shared: shared, albumID: albumID, useOfflineCache: true)
@@ -393,29 +413,30 @@ struct MediaPage: View {
             if !isCancelledRequest(error) { failure = error.localizedDescription }
         }
     }
-    private func requestLivePlayback() {
-        guard item.isLive, live == nil, !working else { return }
-        liveTask = Task { await playLive() }
+    private static func mimeType(_ filename: String) -> String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "mov", "qt": return "video/quicktime"
+        case "m4v": return "video/x-m4v"
+        default: return "video/mp4"
+        }
     }
+    private func requestLivePlayback() {
+        guard item.isLive, live == nil, liveTask == nil else { return }
+        liveTask = Task { await playLive(); liveTask = nil }
+    }
+    /// Prepared Live Photos are cached, so playing again (or coming back) needs no download.
     private func playLive() async {
-        guard item.isLive, live == nil, !working else { return }
+        guard item.isLive, live == nil else { return }
+        if let ready = LivePhotoCache.shared.cached(item, client: client, shared: shared) { live = ready; return }
         working = true
         defer { working = false }
         do {
-            let archive = try await client.livePackage(item, shared: shared, albumID: albumID, useOfflineCache: true)
-            defer { try? FileManager.default.removeItem(at: archive) }
-            let package = try await Task.detached(priority: .userInitiated) { try OriginalPackage.unpack(archive) }.value
-            var retained = false
-            defer { if !retained { try? FileManager.default.removeItem(at: package.directory) } }
-            let photo = try await package.livePhoto(placeholder: full ?? preview)
+            let photo = try await LivePhotoCache.shared.prepare(item, client: client, shared: shared, albumID: albumID, placeholder: full ?? preview)
             try Task.checkCancellation()
-            guard isPageCurrent() else { return }
-            if let temporary { try? FileManager.default.removeItem(at: temporary) }
-            temporary = package.directory
-            retained = true
             withAnimation { live = photo }
         } catch {
-            if !isCancelledRequest(error) { failure = "Live Photo motion couldn’t be loaded. " + error.localizedDescription }
+            // Only report failures the user asked for by pressing; background preparation stays quiet.
+            if livePlaying && !isCancelledRequest(error) { failure = "Live Photo motion couldn’t be loaded. " + error.localizedDescription }
         }
     }
     private func teardown() {

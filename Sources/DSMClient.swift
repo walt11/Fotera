@@ -41,7 +41,8 @@ struct EmptyPayload: Decodable {}
 enum ConnectionError: LocalizedError, Equatable {
     case invalidAddress, invalidResponse, server(Int), unavailable, http(Int), quickConnect, signedOut
     var isSessionExpired: Bool {
-        if case .server(let code) = self { return [106, 107, 119].contains(code) }
+        // 150: DSM binds a session to the IP it signed in from; switching networks or routes needs a fresh sign-in.
+        if case .server(let code) = self { return [106, 107, 119, 150].contains(code) }
         return false
     }
     var errorDescription: String? {
@@ -57,7 +58,7 @@ enum ConnectionError: LocalizedError, Equatable {
             case 101, 120: return "The NAS rejected the request parameters (\(code))."
             case 103: return "This Synology Photos version doesn’t support that operation."
             case 105, 160, 803: return "Your account doesn’t have permission for this (\(code))."
-            case 106, 107, 119: return "Your NAS session expired. Sign in again."
+            case 106, 107, 119, 150: return "Your NAS session expired. Sign in again."
             case 620: return "Synology Photos doesn’t support this file type."
             case 621, 642: return "The destination folder no longer exists."
             case 801: return "Shared Space is unavailable for this account."
@@ -628,6 +629,24 @@ actor DSMClient {
             components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "version", value: "2"),
                 URLQueryItem(name: "method", value: "streaming"), URLQueryItem(name: "id", value: String(id)),
                 URLQueryItem(name: "quality", value: "\"high\""), URLQueryItem(name: "_sid", value: sid)]
+            guard let url = components.url else { throw ConnectionError.invalidResponse }
+            return url
+        }
+    }
+    /// A GET URL for the original video, so AVPlayer can try streaming it with range requests
+    /// instead of downloading the whole file first. Used when the NAS has no converted version.
+    func originalStreamURL(_ photo: RemotePhoto, shared: Bool, albumID: Int? = nil) async throws -> URL {
+        if let cached = await OfflineVault.shared.originalURL(account: address + "|" + username, shared: shared, id: photo.id) { return cached }
+        let api = space(shared, "Download")
+        return try await authorized { sid in
+            let info = try self.info(api, 1)
+            var components = URLComponents(url: self.base.appendingPathComponent("webapi").appendingPathComponent(info.path), resolvingAgainstBaseURL: false)!
+            var items = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "version", value: "1"),
+                         URLQueryItem(name: "method", value: "download"), URLQueryItem(name: "item_id", value: "[\(photo.id)]"),
+                         URLQueryItem(name: "_sid", value: sid)]
+            if let albumID { items.append(URLQueryItem(name: "album_id", value: String(albumID))) }
+            if let key = photo.additional?.thumbnail?.cache_key { items.append(URLQueryItem(name: "cache_key", value: key)) }
+            components.queryItems = items
             guard let url = components.url else { throw ConnectionError.invalidResponse }
             return url
         }

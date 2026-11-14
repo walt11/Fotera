@@ -96,6 +96,61 @@ import ImageIO
                 }
                 record("FINISHED"); return
             }
+            if ProcessInfo.processInfo.arguments.contains("--speed-probe") {
+                // Read-only timing of the requests behind opening photos, videos and Live Photos.
+                let page = try await client.items(.all, shared: false, offset: 0, withLocation: true)
+                func ms(_ start: Date) -> String { String(Int(Date().timeIntervalSince(start) * 1000)) + " ms" }
+                let base = await client.base
+                guard let sid = await client.currentSessionID() else { throw ConnectionError.signedOut }
+                record("route: \(base.absoluteString)")
+                if let photo = page.first(where: { $0.type == "photo" && $0.thumbnailSource != nil }), let source = photo.thumbnailSource {
+                    for size in [ThumbnailSize.sm, .m, .xl] {
+                        let t = Date(); let data = try await client.thumbnail(source, shared: false, size: size)
+                        record("photo thumb \(size.rawValue): \(data.count / 1024) KB in \(ms(t))")
+                    }
+                    let t = Date(); let file = try await client.original(photo, shared: false)
+                    let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    try? FileManager.default.removeItem(at: file)
+                    record("photo original \(photo.filename): \(size / 1024) KB in \(ms(t))")
+                }
+                func ranged(_ url: URL, _ label: String) async {
+                    var request = URLRequest(url: url); request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+                    let t = Date()
+                    do {
+                        let (data, response) = try await URLSession.shared.data(for: request)
+                        let http = response as? HTTPURLResponse
+                        record("\(label): HTTP \(http?.statusCode ?? 0), \(data.count) bytes, type \(http?.mimeType ?? "?"), Accept-Ranges \(http?.value(forHTTPHeaderField: "Accept-Ranges") ?? "-"), Content-Range \(http?.value(forHTTPHeaderField: "Content-Range") ?? "-"), first byte \(ms(t))")
+                    } catch { record("\(label): ERROR \(error.localizedDescription)") }
+                }
+                func download(_ item: RemotePhoto, unit: Bool) throws -> URL {
+                    var components = URLComponents(url: base.appendingPathComponent("webapi/entry.cgi"), resolvingAgainstBaseURL: false)!
+                    components.queryItems = [URLQueryItem(name: "api", value: "SYNO.Foto.Download"), URLQueryItem(name: "version", value: "1"),
+                        URLQueryItem(name: "method", value: "download"), URLQueryItem(name: "_sid", value: sid),
+                        URLQueryItem(name: unit ? "unit_id" : "item_id", value: "[\(unit ? (item.additional?.thumbnail?.unit_id ?? item.id) : item.id)]"),
+                        URLQueryItem(name: "cache_key", value: item.additional?.thumbnail?.cache_key ?? "")]
+                    return components.url!
+                }
+                let videos = page.filter(\.isVideo)
+                record("videos in first page: \(videos.count)")
+                for video in videos.prefix(3) {
+                    let details = try? await client.details(id: video.id, shared: false)
+                    let converted = details?.additional?.video_convert?.map(\.quality) ?? []
+                    record("video \(video.filename) size \((video.filesize ?? 0) / 1024) KB converted \(converted) codec \(details?.additional?.video_meta?.video_codec ?? "?")")
+                    if let url = try? await client.streamingURL(id: video.id, shared: false) { await ranged(url, "  stream high") }
+                    await ranged(try download(video, unit: false), "  original GET")
+                }
+                for live in page.filter(\.isLive).prefix(2) {
+                    record("live \(live.filename) size \((live.filesize ?? 0) / 1024) KB")
+                    if let url = try? await client.streamingURL(id: live.id, shared: false) { await ranged(url, "  live stream high") }
+                    await ranged(try download(live, unit: true), "  live unit GET")
+                    let t = Date(); let package = try await client.livePackage(live, shared: false)
+                    let size = (try? package.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    let t2 = Date(); let unpacked = try? OriginalPackage.unpack(package)
+                    record("  live package: \(size / 1024) KB download \(ms(t)), unpack \(ms(t2)), files \(unpacked?.files.map { $0.pathExtension } ?? [])")
+                    try? FileManager.default.removeItem(at: package); if let unpacked { try? FileManager.default.removeItem(at: unpacked.directory) }
+                }
+                record("FINISHED"); return
+            }
             if ProcessInfo.processInfo.arguments.contains("--recycle-probe") {
                 record("ADMIN: " + String((try await client.featureContract("SYNO.Foto.Setting.Admin", method: "get")).prefix(1500)))
                 record("FINISHED"); return

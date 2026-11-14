@@ -216,6 +216,8 @@ final class FoteraTests: XCTestCase {
         }
         if case .uploaded(let id) = receipt(#"{"success":true,"data":{"id":42}}"#).outcome { XCTAssertEqual(id, 42) } else { XCTFail() }
         if case .sessionExpired = receipt(#"{"success":false,"error":{"code":119}}"#).outcome {} else { XCTFail() }
+        if case .sessionExpired = receipt(#"{"success":false,"error":{"code":150}}"#).outcome {} else { XCTFail("IP-bound session") }
+        XCTAssertTrue(ConnectionError.server(150).isSessionExpired)
         if case .server(620) = receipt(#"{"success":false,"error":{"code":620}}"#).outcome {} else { XCTFail() }
         if case .failed = receipt("", status: 502).outcome {} else { XCTFail() }
         if case .cancelled = receipt("", status: 0, cancelled: true).outcome {} else { XCTFail() }
