@@ -1,0 +1,475 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00000000000000000000006E /* Sources/FoteraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000A /* Sources/FoteraApp.swift */; };
+		00000000000000000000006F /* Sources/DSMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000B /* Sources/DSMClient.swift */; };
+		000000000000000000000070 /* Sources/PhotoLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000C /* Sources/PhotoLibrary.swift */; };
+		000000000000000000000902 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000901 /* Assets.xcassets */; };
+		000000000000000000000A02 /* Sources/LibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000A01 /* Sources/LibraryCache.swift */; };
+		000000000000000000000A04 /* Sources/Transfers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000A03 /* Sources/Transfers.swift */; };
+		000000000000000000000A06 /* Sources/Backup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000A05 /* Sources/Backup.swift */; };
+		000000000000000000000A08 /* Sources/Verification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000A07 /* Sources/Verification.swift */; };
+		000000000000000000000A10 /* Sources/BackgroundTransfers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000A09 /* Sources/BackgroundTransfers.swift */; };
+		000000000000000000000A12 /* Sources/BackupScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000A11 /* Sources/BackupScheduler.swift */; };
+		000000000000000000000B03 /* Sources/WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000B01 /* Sources/WidgetSnapshot.swift */; };
+		000000000000000000000B04 /* Sources/WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000B01 /* Sources/WidgetSnapshot.swift */; };
+		000000000000000000000B05 /* Widget/FoteraWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000B02 /* Widget/FoteraWidget.swift */; };
+		000000000000000000000B07 /* FoteraMemories.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 000000000000000000000B06 /* FoteraMemories.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		000000000000000000000C03 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000C02 /* ZIPFoundation */; };
+		000000000000000000000C06 /* Sources/OriginalPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000C05 /* Sources/OriginalPackage.swift */; };
+		0000000000000000000D0002 /* Sources/Thumbnails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D0001 /* Sources/Thumbnails.swift */; };
+		0000000000000000000D0004 /* Sources/LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D0003 /* Sources/LibraryStore.swift */; };
+		0000000000000000000D0006 /* Sources/Actions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D0005 /* Sources/Actions.swift */; };
+		0000000000000000000D0008 /* Sources/PhotoGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D0007 /* Sources/PhotoGrid.swift */; };
+		0000000000000000000D000A /* Sources/Viewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D0009 /* Sources/Viewer.swift */; };
+		0000000000000000000D000C /* Sources/Collections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D000B /* Sources/Collections.swift */; };
+		0000000000000000000D000E /* Sources/Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000D000D /* Sources/Settings.swift */; };
+		0000000000000000000E0002 = {isa = PBXBuildFile; fileRef = 0000000000000000000E0001; };
+		0000000000000000000E0003 = {isa = PBXBuildFile; fileRef = 0000000000000000000E0001; };
+		0000000000000000000E0005 = {isa = PBXBuildFile; fileRef = 0000000000000000000E0004; };
+		0000000000000000000E0007 = {isa = PBXBuildFile; fileRef = 0000000000000000000E0006; };
+		0000000000000000000F0002 = {isa = PBXBuildFile; fileRef = 0000000000000000000F0001; };
+000000000000000000100002 = {isa = PBXBuildFile; fileRef = 000000000000000000100001; };
+		000000000000000000110002 /* Sources/Design.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000110001 /* Sources/Design.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		000000000000000000000B14 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000B10;
+			remoteInfo = FoteraMemories;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		000000000000000000000B08 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				000000000000000000000B07 /* FoteraMemories.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		000000000000000000000005 /* Fotera.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Fotera.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000000A /* Sources/FoteraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/FoteraApp.swift; sourceTree = "<group>"; };
+		00000000000000000000000B /* Sources/DSMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/DSMClient.swift; sourceTree = "<group>"; };
+		00000000000000000000000C /* Sources/PhotoLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/PhotoLibrary.swift; sourceTree = "<group>"; };
+		000000000000000000000901 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		000000000000000000000A01 /* Sources/LibraryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LibraryCache.swift; sourceTree = "<group>"; };
+		000000000000000000000A03 /* Sources/Transfers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Transfers.swift; sourceTree = "<group>"; };
+		000000000000000000000A05 /* Sources/Backup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Backup.swift; sourceTree = "<group>"; };
+		000000000000000000000A07 /* Sources/Verification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Verification.swift; sourceTree = "<group>"; };
+		000000000000000000000A09 /* Sources/BackgroundTransfers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/BackgroundTransfers.swift; sourceTree = "<group>"; };
+		000000000000000000000A11 /* Sources/BackupScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/BackupScheduler.swift; sourceTree = "<group>"; };
+		000000000000000000000B01 /* Sources/WidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WidgetSnapshot.swift; sourceTree = "<group>"; };
+		000000000000000000000B02 /* Widget/FoteraWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widget/FoteraWidget.swift; sourceTree = "<group>"; };
+		000000000000000000000B06 /* FoteraMemories.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = FoteraMemories.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000C05 /* Sources/OriginalPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/OriginalPackage.swift; sourceTree = "<group>"; };
+		0000000000000000000D0001 /* Sources/Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Thumbnails.swift; sourceTree = "<group>"; };
+		0000000000000000000D0003 /* Sources/LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LibraryStore.swift; sourceTree = "<group>"; };
+		0000000000000000000D0005 /* Sources/Actions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Actions.swift; sourceTree = "<group>"; };
+		0000000000000000000D0007 /* Sources/PhotoGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/PhotoGrid.swift; sourceTree = "<group>"; };
+		0000000000000000000D0009 /* Sources/Viewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Viewer.swift; sourceTree = "<group>"; };
+		0000000000000000000D000B /* Sources/Collections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Collections.swift; sourceTree = "<group>"; };
+		0000000000000000000D000D /* Sources/Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Settings.swift; sourceTree = "<group>"; };
+		0000000000000000000E0001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/BackupActivityAttributes.swift; sourceTree = "<group>"; };
+		0000000000000000000E0004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/BackupLiveActivity.swift; sourceTree = "<group>"; };
+		0000000000000000000E0006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widget/BackupActivityWidget.swift; sourceTree = "<group>"; };
+		0000000000000000000F0001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ConnectionResolver.swift; sourceTree = "<group>"; };
+000000000000000000100001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LibraryFeatures.swift; sourceTree = "<group>"; };
+		000000000000000000110001 /* Sources/Design.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Design.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		000000000000000000000C04 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000C03 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		000000000000000000000003 = {
+			isa = PBXGroup;
+			children = (
+                0000000000000000000F0001,
+000000000000000000100001,
+				0000000000000000000E0006,
+				0000000000000000000E0004,
+				0000000000000000000E0001,
+				000000000000000000000C05 /* Sources/OriginalPackage.swift */,
+				000000000000000000110001 /* Sources/Design.swift */,
+				0000000000000000000D0001 /* Sources/Thumbnails.swift */,
+				0000000000000000000D0003 /* Sources/LibraryStore.swift */,
+				0000000000000000000D0005 /* Sources/Actions.swift */,
+				0000000000000000000D0007 /* Sources/PhotoGrid.swift */,
+				0000000000000000000D0009 /* Sources/Viewer.swift */,
+				0000000000000000000D000B /* Sources/Collections.swift */,
+				0000000000000000000D000D /* Sources/Settings.swift */,
+				000000000000000000000B01 /* Sources/WidgetSnapshot.swift */,
+				000000000000000000000B02 /* Widget/FoteraWidget.swift */,
+				000000000000000000000B06 /* FoteraMemories.appex */,
+				000000000000000000000A11 /* Sources/BackupScheduler.swift */,
+				000000000000000000000A09 /* Sources/BackgroundTransfers.swift */,
+				000000000000000000000A07 /* Sources/Verification.swift */,
+				000000000000000000000A05 /* Sources/Backup.swift */,
+				000000000000000000000A03 /* Sources/Transfers.swift */,
+				000000000000000000000A01 /* Sources/LibraryCache.swift */,
+				000000000000000000000901 /* Assets.xcassets */,
+				00000000000000000000000A /* Sources/FoteraApp.swift */,
+				00000000000000000000000B /* Sources/DSMClient.swift */,
+				00000000000000000000000C /* Sources/PhotoLibrary.swift */,
+				000000000000000000000005 /* Fotera.app */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		000000000000000000000004 /* Fotera */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000006 /* Build configuration list for PBXNativeTarget "Fotera" */;
+			buildPhases = (
+				000000000000000000000C04 /* Frameworks */,
+				000000000000000000000007 /* Sources */,
+				000000000000000000000900 /* Resources */,
+				000000000000000000000B08 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				000000000000000000000B15 /* PBXTargetDependency */,
+			);
+			name = Fotera;
+			packageProductDependencies = (
+				000000000000000000000C02 /* ZIPFoundation */,
+			);
+			productName = Fotera;
+			productReference = 000000000000000000000005 /* Fotera.app */;
+			productType = "com.apple.product-type.application";
+		};
+		000000000000000000000B10 /* FoteraMemories */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000B11 /* Build configuration list for PBXNativeTarget "FoteraMemories" */;
+			buildPhases = (
+				000000000000000000000B09 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FoteraMemories;
+			productName = FoteraMemories;
+			productReference = 000000000000000000000B06 /* FoteraMemories.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		000000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					000000000000000000000004 = {
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+					000000000000000000000B10 = {
+						DevelopmentTeam = 76BJCJ4Q7X;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+				};
+			};
+			buildConfigurationList = 000000000000000000000002 /* Build configuration list for PBXProject "Fotera" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 000000000000000000000003;
+			packageReferences = (
+				000000000000000000000C01 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				000000000000000000000004 /* Fotera */,
+				000000000000000000000B10 /* FoteraMemories */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		000000000000000000000900 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000902 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		000000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+                0000000000000000000F0002,
+000000000000000000100002,
+				0000000000000000000E0002,
+				0000000000000000000E0005,
+				000000000000000000000C06 /* Sources/OriginalPackage.swift in Sources */,
+				000000000000000000110002 /* Sources/Design.swift in Sources */,
+				0000000000000000000D0002 /* Sources/Thumbnails.swift in Sources */,
+				0000000000000000000D0004 /* Sources/LibraryStore.swift in Sources */,
+				0000000000000000000D0006 /* Sources/Actions.swift in Sources */,
+				0000000000000000000D0008 /* Sources/PhotoGrid.swift in Sources */,
+				0000000000000000000D000A /* Sources/Viewer.swift in Sources */,
+				0000000000000000000D000C /* Sources/Collections.swift in Sources */,
+				0000000000000000000D000E /* Sources/Settings.swift in Sources */,
+				000000000000000000000B03 /* Sources/WidgetSnapshot.swift in Sources */,
+				000000000000000000000A12 /* Sources/BackupScheduler.swift in Sources */,
+				000000000000000000000A10 /* Sources/BackgroundTransfers.swift in Sources */,
+				000000000000000000000A08 /* Sources/Verification.swift in Sources */,
+				000000000000000000000A06 /* Sources/Backup.swift in Sources */,
+				000000000000000000000A04 /* Sources/Transfers.swift in Sources */,
+				000000000000000000000A02 /* Sources/LibraryCache.swift in Sources */,
+				00000000000000000000006E /* Sources/FoteraApp.swift in Sources */,
+				00000000000000000000006F /* Sources/DSMClient.swift in Sources */,
+				000000000000000000000070 /* Sources/PhotoLibrary.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000B09 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0000000000000000000E0003,
+				0000000000000000000E0007,
+				000000000000000000000B04 /* Sources/WidgetSnapshot.swift in Sources */,
+				000000000000000000000B05 /* Widget/FoteraWidget.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		000000000000000000000B15 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000B10 /* FoteraMemories */;
+			targetProxy = 000000000000000000000B14 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0000000000000000000000C8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		0000000000000000000000C9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		000000000000000000000258 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Device.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Simulator.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Fotera;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your Synology photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save downloaded originals to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Back up the photos and videos you choose to your Synology NAS.";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = net.jwalter.PhotoHarbor;
+				PRODUCT_NAME = Fotera;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		000000000000000000000259 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Device.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Simulator.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Fotera;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your Synology photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save downloaded originals to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Back up the photos and videos you choose to your Synology NAS.";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = net.jwalter.PhotoHarbor;
+				PRODUCT_NAME = Fotera;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		000000000000000000000B12 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Widget/Device.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Widget/Simulator.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Widget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fotera Photo";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Memories;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = net.jwalter.PhotoHarbor.Memories;
+				PRODUCT_NAME = FoteraMemories;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		000000000000000000000B13 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Widget/Device.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Widget/Simulator.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Widget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fotera Photo";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Memories;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = net.jwalter.PhotoHarbor.Memories;
+				PRODUCT_NAME = FoteraMemories;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		000000000000000000000002 /* Build configuration list for PBXProject "Fotera" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0000000000000000000000C8 /* Debug */,
+				0000000000000000000000C9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000006 /* Build configuration list for PBXNativeTarget "Fotera" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000258 /* Debug */,
+				000000000000000000000259 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000B11 /* Build configuration list for PBXNativeTarget "FoteraMemories" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000B12 /* Debug */,
+				000000000000000000000B13 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000C01 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		000000000000000000000C02 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000C01 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 000000000000000000000001 /* Project object */;
+}
