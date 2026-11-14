@@ -133,6 +133,13 @@ import Photos
                         let types = PHAssetResource.assetResources(for: asset).map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(separator: " ")
                         let nasSize = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { "\($0 / 1024) KB" } ?? "?"
                         let links = (BackupController.shared.queue?.photoLinks ?? []).filter { $0.localID == id }.map { "remote \($0.remoteID) at \(iso.string(from: $0.created))" }
+                        var all: [String] = []
+                        for resource in PHAssetResource.assetResources(for: asset) {
+                            let local = FileManager.default.temporaryDirectory.appendingPathComponent("Integrity-" + UUID().uuidString)
+                            defer { try? FileManager.default.removeItem(at: local) }
+                            if let (digest, size) = try? await StagedExport.write(resource, to: local) { all.append("\(resource.type.rawValue):\(size / 1024) KB \(nas.contains(digest) ? "MATCH" : "no")") }
+                        }
+                        record("  every phone resource vs NAS: " + all.joined(separator: ", "))
                         record("  NAS id \(item.id) \(nasSize); created \(asset.creationDate.map(iso.string) ?? "?"), modified \(asset.modificationDate.map(iso.string) ?? "?"), edited \(asset.hasAdjustments); resources \(types); uploads \(links)")
                     }
                 }

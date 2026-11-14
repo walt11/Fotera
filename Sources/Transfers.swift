@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import Photos
 import UniformTypeIdentifiers
 import CryptoKit
 import ImageIO
@@ -666,7 +667,9 @@ struct TransfersView: View {
                 }.foregroundStyle(.primary)
             } header: { Text("Destination") }
             Section {
-                PhotosPicker(selection: $picked, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current) {
+                // Picking from the shared library gives each item's identifier, so the untouched original
+                // (and a Live Photo's video) can be exported instead of the edited, current rendering.
+                PhotosPicker(selection: $picked, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current, photoLibrary: .shared()) {
                     Label("Choose from Photos", systemImage: "photo.on.rectangle")
                 }
                 Button { importing = true } label: { Label("Choose from Files", systemImage: "folder") }
@@ -696,13 +699,44 @@ struct TransfersView: View {
             Task {
                 adding = true
                 var urls: [URL] = []
+                var originals: [(URL, String, (String, Int64))] = []
                 for item in items {
-                    do { if let file = try await item.loadTransferable(type: PickedFile.self) { urls.append(file.url) } }
-                    catch { failure = error.localizedDescription }
+                    do {
+                        if let exported = try await Self.exportOriginals(item.itemIdentifier) { originals += exported }
+                        else if let file = try await item.loadTransferable(type: PickedFile.self) { urls.append(file.url) }
+                    } catch { failure = error.localizedDescription }
                 }
                 adding = false
+                addOriginals(originals)
                 add(urls, move: true)
             }
+        }
+    }
+    /// Exports an asset's original resources byte for byte, with their real names. Returns nil when the
+    /// picked item can't be read from the library (no Photos access); the picker's file is used then.
+    static func exportOriginals(_ identifier: String?) async throws -> [(URL, String, (String, Int64))]? {
+        guard let identifier, LocalAssets.allowed,
+              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { return nil }
+        let resources = PHAssetResource.assetResources(for: asset).filter { [.photo, .video, .pairedVideo, .alternatePhoto].contains($0.type) }
+        guard !resources.isEmpty else { return nil }
+        var files: [(URL, String, (String, Int64))] = []
+        for resource in resources {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("FoteraUpload-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent(resource.originalFilename)
+            files.append((file, resource.originalFilename, try await StagedExport.write(resource, to: file)))
+        }
+        return files
+    }
+    private func addOriginals(_ files: [(URL, String, (String, Int64))]) {
+        guard !files.isEmpty, let client = app.client, !folderPath.isEmpty else { return }
+        Task {
+            for (url, name, digest) in files {
+                do { try await queue.enqueue(url, filename: name, folder: folderPath, shared: shared, move: true, digest: digest) }
+                catch { failure = error.localizedDescription }
+                try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+            }
+            queue.start(client: client, wifiOnly: false)
         }
     }
     private func add(_ urls: [URL], move: Bool) {
