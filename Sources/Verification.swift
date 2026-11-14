@@ -2,6 +2,7 @@
 import Foundation
 import UIKit
 import ImageIO
+import Photos
 
 /// Opt-in development checks (launch with `--fotera-verify`). Never reads credentials into a report.
 /// Creates/reuses a synthetic JPEG in `/Fotera Validation`; never enables public sharing or deletes photos.
@@ -105,6 +106,17 @@ import ImageIO
                 record("route: \(base.absoluteString)")
                 if ProcessInfo.processInfo.arguments.contains("--local-probe") {
                     record("photos access: \(LocalAssets.allowed)")
+                    do {
+                        let t1 = Date(); let phone = await PhoneLibraryIndex.shared.photos(); record("phone index: \(phone.count) items in \(ms(t1))")
+                        await PhoneLibraryIndex.shared.invalidate()
+                        let t1b = Date(); _ = await PhoneLibraryIndex.shared.photos(); record("phone index rescan: \(ms(t1b))")
+                        var all: [RemotePhoto] = []; var off = 0
+                        while true { let chunk = try await client.items(.all, shared: false, offset: off); all += chunk; off += chunk.count; if chunk.count < DSMClient.pageSize { break } }
+                        let t2 = Date(); let merged = UnifiedLibrary.merge(remote: all, local: phone); record("merge \(all.count) NAS + \(phone.count) phone -> \(merged.count), linked \(merged.filter { !$0.isLocalOnly && $0.localAssetID != nil }.count) in \(ms(t2))")
+                        let t3 = Date(); var thumbs = 0
+                        for item in phone.prefix(40) { if let id = item.localAssetID, let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject, await LocalCopy.image(asset, maxPixels: 480) != nil { thumbs += 1 } }
+                        record("40 local grid thumbs (480px, high quality): \(thumbs) in \(ms(t3))")
+                    }
                     let recent = try await client.recentlyAdded(shared: false, offset: 0, limit: 10)
                     record("recently added: " + recent.map { "\($0.filename) \($0.date.map { PhotoTime.format($0, .dateTime.month().day().year()) } ?? "")" }.joined(separator: ", "))
                     for offset in stride(from: 0, to: 1000, by: 500) {

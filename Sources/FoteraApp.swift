@@ -7,7 +7,9 @@ import WidgetKit
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--delete-warning-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--phone-library-preview") {
+                MainTabs().environmentObject(app).task { await app.previewPhoneLibrary() }
+            } else if ProcessInfo.processInfo.arguments.contains("--delete-warning-preview") {
                 DeleteWarningPreview().environmentObject(app)
             } else if ProcessInfo.processInfo.arguments.contains("--memory-navigation-test") {
                 MemoryNavigationPreview().environmentObject(app)
@@ -73,6 +75,24 @@ import WidgetKit
             MainActor.assumeIsolated { self?.sessionExpired() }
         }
     }
+    #if DEBUG
+    /// Simulator verification without signing in, uploads, or any real NAS connection.
+    func previewPhoneLibrary() async {
+        guard let connection = try? DSMClient(address: "http://127.0.0.1:9") else { return }
+        client = connection
+        ImagePipeline.shared.configure(client: connection, account: "phone-preview")
+        await library.attach(client: connection, account: "phone-preview", shared: false)
+        await library.requestPhotoAccess()
+        let photos = await PhoneLibraryIndex.shared.photos()
+        var report = "Phone items: \(photos.count)\n"
+        if let item = photos.first(where: { !$0.isVideo }), let asset = await LocalCopy.asset(item) {
+            let image = await LocalCopy.image(asset, maxPixels: 1200)
+            report += "Local image: \(image != nil ? "PASS" : "FAIL")\n"
+        }
+        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("unified-library-check.txt")
+        try? report.write(to: file, atomically: true, encoding: .utf8)
+    }
+    #endif
     func restore() async {
         guard phase == .launching else { return }
         guard let saved = try? SessionStore.load(), let connection = try? await DSMClient.open(address: saved.address, cachedEndpoint: saved.resolvedAddress) else { phase = .signedOut; return }
@@ -177,7 +197,7 @@ import WidgetKit
         // Backup's duplicate check reuses the timeline index instead of listing the NAS again.
         TransferQueue.catalogSource = { [weak library] shared in
             guard let library, library.shared == shared, library.lastSynced != nil else { return nil }
-            return library.photos
+            return library.remotePhotos
         }
         ImagePipeline.shared.configure(client: connection, account: account)
         BackupController.shared.attach(client: connection, account: account)
@@ -564,6 +584,7 @@ struct PhotosTab: View {
                         MemoryStoryView(memory: memory, shared: app.shared) { pendingTimelinePhoto = $0 }
                     }
                 }
+                .task { library.refreshPhoneLibrary() }
                 .onAppear {
                     library.grouping = TimelineGrouping(rawValue: grouping) ?? .day
                     if DebugScreen.name == "settings" { showingSettings = true }
@@ -583,7 +604,7 @@ struct PhotosTab: View {
     }
     @ViewBuilder private var content: some View {
         if library.photos.isEmpty {
-            if library.syncing {
+            if library.syncing || library.loadingPhone {
                 SkeletonGrid().overlay(alignment: .bottom) {
                     if let progress = library.progress { Text(progress).font(.footnote).card(padding: 10).padding(.bottom, 24) }
                 }
@@ -593,11 +614,13 @@ struct PhotosTab: View {
                 } description: { Text(failure) } actions: { Button("Try again") { library.refresh() } }
             } else {
                 ContentUnavailableView("No photos yet", systemImage: "photo.on.rectangle",
-                    description: Text(app.shared ? "Shared Space is empty." : "Turn on backup or upload photos to see them here."))
+                    description: Text(app.shared ? "Shared Space is empty." : "Allow Photos access to include your iPhone library."))
+                    .overlay(alignment: .bottom) { if !app.shared { phoneAccess.padding(.bottom, 40) } }
             }
         } else {
             PhotoGrid(sections: library.gridSections, shared: app.shared, selection: $selection, showsScrubber: true, timelineJump: timelineJump) {
                 VStack(alignment: .leading, spacing: 8) {
+                    if !app.shared { phoneAccess }
                     if let notice = app.notice ?? library.failure.map({ "Couldn’t refresh: " + $0 }) {
                         Label(notice, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 12)
                     }
@@ -610,6 +633,17 @@ struct PhotosTab: View {
             // A different account or space is a different timeline: start it at the top, not at the
             // old scroll offset, which may be past the end of a shorter library.
             .id(app.account + (app.shared ? "|shared" : "|personal"))
+        }
+    }
+    @ViewBuilder private var phoneAccess: some View {
+        if library.photoAccess == .notDetermined {
+            Button { Task { await library.requestPhotoAccess() } } label: {
+                Label("Include iPhone photos", systemImage: "iphone")
+            }.padding(.horizontal, 12).padding(.vertical, 8)
+        } else if library.photoAccess == .limited {
+            Button("Showing selected iPhone photos · Manage access") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }.font(.footnote).padding(.horizontal, 12)
         }
     }
     private var memories: some View {

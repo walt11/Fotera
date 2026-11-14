@@ -96,11 +96,8 @@ struct PhotoGrid<Header: View>: View {
             }
             .scrollIndicators(usesTimelineScrubber ? .hidden : .automatic)
             .modifier(ScrollTracking(fraction: $scrollFraction, active: $scrolling))
-            .overlay(alignment: .trailing) {
-                if usesTimelineScrubber {
-                    TimelineScrubber(sections: sections, proxy: proxy, fraction: scrollFraction, scrolling: scrolling)
-                }
-            }
+            .modifier(TimelineScrubber(sections: sections, proxy: proxy, enabled: usesTimelineScrubber,
+                                       fraction: scrollFraction, scrolling: scrolling))
         }
         .task(id: handledJump) {
             guard let requestID = handledJump else { return }
@@ -226,9 +223,10 @@ extension PhotoGrid where Header == EmptyView {
 
 /// The right-edge scrubber. A thumb follows scrolling (iOS 18+), year markers appear while dragging,
 /// and dragging jumps through the timeline with a date bubble, like Immich.
-struct TimelineScrubber: View {
+struct TimelineScrubber: ViewModifier {
     let sections: [GridSection]
     let proxy: ScrollViewProxy
+    var enabled: Bool
     var fraction: CGFloat = 0
     var scrolling = false
     @State private var position: CGFloat?
@@ -245,11 +243,54 @@ struct TimelineScrubber: View {
         }
         return result
     }
-    var body: some View {
+    func body(content: Content) -> some View {
         GeometryReader { geometry in
-            let height = geometry.size.height
+            let height = max(1, geometry.size.height - 16)
+            content
+                .overlay(alignment: .trailing) {
+                    if enabled {
+                        ZStack(alignment: .trailing) {
+                            scrubber(height: height).allowsHitTesting(false)
+                            // Only the thumb strip takes touches, and only while the scrubber is showing
+                            // (after scrolling, like Immich). The rest of the time edge taps reach the photos.
+                            if visible || position != nil {
+                                Color.clear.frame(width: 28).contentShape(Rectangle())
+                                    .gesture(DragGesture(minimumDistance: 0).onChanged { value in scrub(to: value.location.y, height: height) }
+                                        .onEnded { _ in
+                                            withAnimation(.easeOut.delay(0.4)) { position = nil }
+                                            lastIndex = -1
+                                        })
+                            }
+                        }
+                        .frame(width: 44, height: height)
+                    }
+                }
+        }
+        .onChange(of: scrolling) {
+            if scrolling { withAnimation(.easeIn(duration: 0.15)) { visible = true } }
+        }
+        .task(id: scrolling) {
+            guard !scrolling else { return }
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { visible = false }
+        }
+    }
+    private func scrub(to y: CGFloat, height: CGFloat) {
+        guard enabled, !sections.isEmpty else { return }
+        let fraction = min(max(0, y / height), 0.999)
+        let index = Int(fraction * CGFloat(sections.count))
+        position = min(max(0, y), height)
+        guard index != lastIndex else { return }
+        lastIndex = index
+        let section = sections[index]
+        label = section.items.first?.date.map { PhotoTime.format($0, .dateTime.month(.abbreviated).year()) } ?? (section.title ?? "")
+        proxy.scrollTo(section.id, anchor: .top)
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+    private func scrubber(height: CGFloat) -> some View {
             ZStack(alignment: .topTrailing) {
-                Color.clear.contentShape(Rectangle())
+                Color.clear
                 if position != nil {
                     // Year markers, skipping any that would overlap the previous one.
                     let markers = years.reduce(into: [(Int, CGFloat)]()) { result, entry in
@@ -285,32 +326,7 @@ struct TimelineScrubber: View {
                         .transition(.opacity)
                 }
             }
-            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                guard !sections.isEmpty else { return }
-                let fraction = min(max(0, value.location.y / max(1, height)), 0.999)
-                let index = Int(fraction * CGFloat(sections.count))
-                position = value.location.y
-                if index != lastIndex {
-                    lastIndex = index
-                    let section = sections[index]
-                    label = section.items.first?.date.map { PhotoTime.format($0, .dateTime.month(.abbreviated).year()) } ?? (section.title ?? "")
-                    proxy.scrollTo(section.id, anchor: .top)
-                    UISelectionFeedbackGenerator().selectionChanged()
-                }
-            }.onEnded { _ in withAnimation(.easeOut.delay(0.4)) { position = nil }; lastIndex = -1 })
-        }
-        .frame(width: 44)
-        .padding(.vertical, 8)
-        .onChange(of: scrolling) {
-            if scrolling { withAnimation(.easeIn(duration: 0.15)) { visible = true } }
-        }
-        .task(id: scrolling) {
-            guard !scrolling else { return }
-            try? await Task.sleep(for: .seconds(1.2))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.3)) { visible = false }
-        }
-        .accessibilityHidden(true)
+            .accessibilityHidden(true)
     }
 }
 

@@ -76,7 +76,7 @@ struct DuplicatesView: View {
                             HStack(spacing: 8) {
                                 ForEach(group.items) { item in
                                     let marked = selected.contains(item.id)
-                                    ThumbnailView(source: item.thumbnailSource, shared: app.shared, size: .m)
+                                    ThumbnailView(source: item.thumbnailSource, shared: app.shared, size: .m, fallbackPhoto: item)
                                         .frame(width: 110, height: 110)
                                         .clipShape(RoundedRectangle(cornerRadius: Theme.small))
                                         .overlay(alignment: .topTrailing) {
@@ -107,13 +107,13 @@ struct DuplicatesView: View {
             if !selected.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Delete \(selected.count)", role: .destructive) {
-                        runner.requestDelete(library.photos.filter { selected.contains($0.id) }, app: app)
+                        runner.requestDelete(library.remotePhotos.filter { selected.contains($0.id) }, app: app)
                     }
                 }
             }
         }
         .actionRunner(runner) { scan() }
-        .task(id: library.photos.count) { scan() }
+        .task(id: library.remotePhotos.count) { scan() }
     }
     private func label(_ kind: DuplicateGroup.Kind) -> String {
         switch kind {
@@ -123,7 +123,7 @@ struct DuplicatesView: View {
         }
     }
     private func scan() {
-        let photos = library.photos
+        let photos = library.remotePhotos   // Duplicates are a NAS clean-up tool; phone-only items aren't candidates.
         let client = app.client, shared = app.shared
         Task {
             var found = await Task.detached(priority: .userInitiated) { DuplicateFinder.groups(in: photos) }.value

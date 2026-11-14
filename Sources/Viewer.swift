@@ -86,6 +86,10 @@ struct MediaViewer: View {
     private func loadFavorite() {
         guard let current, state.favorites[current.id] == nil, let client = app.client else { return }
         let id = current.id
+        if current.isLocalOnly {
+            Task { if let local = await LocalCopy.asset(current) { state.favorites[id] = local.isFavorite } }
+            return
+        }
         // The synced favorites list already knows this; only ask the NAS when it hasn't loaded.
         if shared == app.shared, FavoriteMarks.shared.loaded {
             state.favorites[id] = FavoriteMarks.shared.ids.contains(id); return
@@ -145,8 +149,8 @@ struct MediaViewer: View {
     private func moreMenu(_ item: RemotePhoto) -> some View {
         Menu {
             Button("Details", systemImage: "info.circle") { showingInfo = true }
-            Button("Add to album", systemImage: "rectangle.stack.badge.plus") { runner.pickingAlbum = [item] }
-            Button("Save to Photos", systemImage: "square.and.arrow.down") { runner.saveToPhotos([item], app: app, albumID: album?.id) }
+            Button("Add to album", systemImage: "rectangle.stack.badge.plus") { runner.pickingAlbum = [item] }.disabled(item.isLocalOnly)
+            Button("Save to Photos", systemImage: "square.and.arrow.down") { runner.saveToPhotos([item], app: app, albumID: album?.id) }.disabled(item.localAssetID != nil)
             Button(slideshow ? "Stop slideshow" : "Slideshow", systemImage: slideshow ? "pause" : "play.rectangle") {
                 slideshow.toggle(); state.chromeVisible = !slideshow
             }
@@ -288,12 +292,12 @@ actor LocalAssets {
     private var matches: [String: String?] = [:]
     /// Capture times (whole seconds) of every photo on the phone, to rule out most NAS-only items cheaply.
     private var times: Set<Int>?
-    private var observer: LocalLibraryObserver?
     nonisolated static var allowed: Bool {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         return status == .authorized || status == .limited
     }
     func identifier(for item: RemotePhoto) -> String? {
+        if Self.allowed, let local = item.localAssetID { return local }
         guard Self.allowed, item.passphrase == nil, let time = item.time else { return nil }
         let key = "\(item.id)|\(item.additional?.thumbnail?.cache_key ?? "")"
         if let known = matches[key] { return known }
@@ -315,7 +319,7 @@ actor LocalAssets {
     }
     private func localTimes() -> Set<Int> {
         if let times { return times }
-        if observer == nil { observer = LocalLibraryObserver() }
+        LocalLibraryObserver.shared.start()
         var set = Set<Int>()
         PHAsset.fetchAssets(with: nil).enumerateObjects { asset, _, _ in
             if let date = asset.creationDate { set.insert(Int(date.timeIntervalSince1970.rounded())) }
@@ -346,11 +350,27 @@ actor LocalAssets {
     }
 }
 /// Forgets matches when photos are added to or removed from the phone, and refreshes the badges.
+/// One observer for the app. Photos often sends bursts of changes (iCloud sync, edits), so they're
+/// coalesced into a single refresh.
 final class LocalLibraryObserver: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
-    override init() { super.init(); PHPhotoLibrary.shared().register(self) }
+    static let shared = LocalLibraryObserver()
+    private let lock = NSLock()
+    private var started = false
+    private var pending: Task<Void, Never>?
+    func start() {
+        lock.lock(); defer { lock.unlock() }
+        guard !started else { return }
+        started = true
+        PHPhotoLibrary.shared().register(self)
+    }
     func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task {
+        lock.lock(); defer { lock.unlock() }
+        pending?.cancel()
+        pending = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
             await LocalAssets.shared.clear()
+            await PhoneLibraryIndex.shared.invalidate()
             await MainActor.run { NotificationCenter.default.post(name: .foteraLocalLibraryChanged, object: nil) }
         }
     }
@@ -366,7 +386,12 @@ struct LocalAvailabilityBadge: View {
     @State private var revision = 0
     var body: some View {
         Group {
-            if onPhone == false {
+            if item.isLocalOnly {
+                Image(systemName: "iphone").font(.system(size: compact ? 8 : 10, weight: .semibold))
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2).padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .accessibilityLabel("iPhone only")
+            } else if onPhone == false {
                 Image(systemName: "cloud.fill").font(.system(size: compact ? 8 : 10, weight: .semibold))
                     .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2)
                     .padding(5)
@@ -389,9 +414,9 @@ struct LocalAvailabilityBadge: View {
         guard let id = await LocalAssets.shared.identifier(for: item) else { return nil }
         return PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
     }
-    static func image(_ asset: PHAsset, maxPixels: CGFloat) async -> UIImage? {
+    static func image(_ asset: PHAsset, maxPixels: CGFloat, network: Bool = false) async -> UIImage? {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat; options.resizeMode = .fast; options.isNetworkAccessAllowed = false
+        options.deliveryMode = .highQualityFormat; options.resizeMode = .fast; options.isNetworkAccessAllowed = network
         return await withCheckedContinuation { continuation in
             var resumed = false
             PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: maxPixels, height: maxPixels), contentMode: .aspectFit, options: options) { image, info in
@@ -400,9 +425,9 @@ struct LocalAvailabilityBadge: View {
             }
         }
     }
-    static func livePhoto(_ asset: PHAsset) async -> PHLivePhoto? {
+    static func livePhoto(_ asset: PHAsset, network: Bool = false) async -> PHLivePhoto? {
         let options = PHLivePhotoRequestOptions()
-        options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = false
+        options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = network
         return await withCheckedContinuation { continuation in
             var resumed = false
             PHImageManager.default().requestLivePhoto(for: asset, targetSize: CGSize(width: 2400, height: 2400), contentMode: .aspectFit, options: options) { photo, info in
@@ -411,9 +436,9 @@ struct LocalAvailabilityBadge: View {
             }
         }
     }
-    static func video(_ asset: PHAsset) async -> AVAsset? {
+    static func video(_ asset: PHAsset, network: Bool = false) async -> AVAsset? {
         let options = PHVideoRequestOptions()
-        options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = false; options.version = .current
+        options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = network; options.version = .current
         return await withCheckedContinuation { continuation in
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { video, _, _ in continuation.resume(returning: video) }
         }
@@ -474,9 +499,10 @@ struct MediaPage: View {
             // Show the grid thumbnail already in memory right away, then upgrade to the sharp preview.
             if let source = item.thumbnailSource, preview == nil { preview = ImagePipeline.shared.bestCached(source, shared: shared) }
             // The copy on this iPhone, when there is one, needs no download at all.
-            if !item.isVideo, let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 2400) {
+            if let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 2400, network: item.isLocalOnly) {
                 preview = image; return
             }
+            if item.isLocalOnly { if !item.isVideo { failure = "This photo is unavailable. Check Photos access or your iCloud connection." }; return }
             if let source = item.thumbnailSource, let sharp = await ImagePipeline.shared.image(source, shared: shared, size: .xl) { preview = sharp }
             if preview == nil && !item.isVideo { loadOriginal() }
         }
@@ -515,7 +541,8 @@ struct MediaPage: View {
         Task {
             defer { loadingFull = false }
             do {
-                if let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 6000) { full = image; return }
+                if let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 6000, network: item.isLocalOnly) { full = image; return }
+                guard !item.isLocalOnly else { throw MediaFailure.unsupportedPhoto }
                 let file = try await client.original(item, shared: shared, albumID: albumID, useOfflineCache: true)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let image = await ImagePipeline.decode(file: file, maxPixels: 6000) else { throw MediaFailure.unsupportedPhoto }
@@ -535,7 +562,8 @@ struct MediaPage: View {
         do {
             var asset: AVAsset?
             // The copy on this iPhone plays immediately.
-            if let local = await LocalCopy.asset(item) { asset = await LocalCopy.video(local) }
+            if let local = await LocalCopy.asset(item) { asset = await LocalCopy.video(local, network: item.isLocalOnly) }
+            if item.isLocalOnly && asset == nil { throw MediaFailure.unsupportedVideo }
             // Settings → Video quality decides between the NAS's smaller stream and the original.
             if asset == nil, VideoQuality.current.prefersStream, let url = try? await client.streamingURL(id: item.id, shared: shared) {
                 let candidate = AVURLAsset(url: url)
@@ -576,10 +604,11 @@ struct MediaPage: View {
     private func playLive() async {
         guard item.isLive, live == nil else { return }
         if let ready = LivePhotoCache.shared.cached(item, client: client, shared: shared) { live = ready; return }
-        if let local = await LocalCopy.asset(item), let photo = await LocalCopy.livePhoto(local) {
+        if let local = await LocalCopy.asset(item), let photo = await LocalCopy.livePhoto(local, network: item.isLocalOnly) {
             guard !Task.isCancelled else { return }
             live = photo; return
         }
+        guard !item.isLocalOnly else { failure = "Live Photo motion is unavailable on this iPhone."; return }
         working = true
         defer { working = false }
         do {
@@ -784,10 +813,10 @@ struct ItemInfoView: View {
                 if let failure { Section { Text(failure).foregroundStyle(.secondary) } }
             }
             .navigationTitle("Details").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Edit") { editingMetadata = true } }
+            .toolbar { if !item.isLocalOnly { Button("Edit") { editingMetadata = true } } }
             .sheet(isPresented: $editingMetadata, onDismiss: { Task { if let client = app.client { details = try? await client.details(id: item.id, shared: shared) } } }) { PhotoMetadataEditor(item: item, shared: shared) }
             .task {
-                guard let client = app.client else { return }
+                guard !item.isLocalOnly, let client = app.client else { return }
                 do { details = try await client.details(id: item.id, shared: shared) }
                 catch { failure = error.localizedDescription }
             }
@@ -801,7 +830,7 @@ struct ItemInfoView: View {
             if megapixels >= 1 { parts.append(String(format: "%.0f MP", megapixels)) }
         }
         if let size = details?.filesize ?? item.filesize { parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
-        parts.append(shared ? "Shared Space" : "Personal Space")
+        parts.append(item.isLocalOnly ? "iPhone" : (item.localAssetID != nil ? "iPhone and NAS" : (shared ? "Shared Space" : "NAS")))
         return parts.joined(separator: " · ")
     }
     private func row(_ icon: String, _ title: String, subtitle: String?) -> some View {

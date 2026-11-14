@@ -4,12 +4,12 @@ import UIKit
 /// Schedules backup work when Fotera isn't open: a short app-refresh task to keep uploads moving,
 /// and a longer processing task (usually overnight while charging) that also verifies uploads.
 @MainActor enum BackupScheduler {
-    nonisolated static var continuedID: String { (Bundle.main.bundleIdentifier ?? "PhotoHarbor") + ".continued.backup" }
+    nonisolated static var continuedID: String { (Bundle.main.bundleIdentifier ?? "net.jwalter.PhotoHarbor") + ".continued.backup" }
     private static var continuedTask: BGTask?
     private static var continuedRequested = false
     static var hasContinuedBackup: Bool { continuedRequested || continuedTask != nil }
-    nonisolated static var processingID: String { (Bundle.main.bundleIdentifier ?? "PhotoHarbor") + ".backup" }
-    nonisolated static var refreshID: String { (Bundle.main.bundleIdentifier ?? "PhotoHarbor") + ".refresh" }
+    nonisolated static var processingID: String { (Bundle.main.bundleIdentifier ?? "net.jwalter.PhotoHarbor") + ".backup" }
+    nonisolated static var refreshID: String { (Bundle.main.bundleIdentifier ?? "net.jwalter.PhotoHarbor") + ".refresh" }
 
     nonisolated static func register() {
         if #available(iOS 26.0, *) {

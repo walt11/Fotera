@@ -283,7 +283,7 @@ struct Filmstrip: View {
                 LazyHStack(spacing: 2) {
                     ForEach(window, id: \.self) { position in
                         let current = position == state.index
-                        ThumbnailView(source: items[position].thumbnailSource, shared: shared, size: .sm)
+                        ThumbnailView(source: items[position].thumbnailSource, shared: shared, size: .sm, fallbackPhoto: items[position])
                             .frame(width: current ? 44 : 30, height: 44)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white, lineWidth: current ? 2 : 0))

@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import Photos
 
 struct TimelineSection: Identifiable, Sendable {
     let id: Date
@@ -33,12 +34,116 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     @Published private(set) var failure: String?
     @Published private(set) var lastSynced: Date?
     @Published var grouping: TimelineGrouping = .day { didSet { if oldValue != grouping { rebuild() } } }
+    private(set) var remotePhotos: [RemotePhoto] = []
+    private var phonePhotos: [RemotePhoto] = []
+    @Published private(set) var photoAccess = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    @Published private(set) var loadingPhone = false
+    private var phoneTask: Task<Void, Never>?
+    private var localObserver: NSObjectProtocol?
+    private var uploadObserver: NSObjectProtocol?
+    private var uploadRefreshTask: Task<Void, Never>?
+    private var phoneGeneration = UUID()
+    init(remotePhotos: [RemotePhoto] = [], phonePhotos: [RemotePhoto] = []) {
+        self.remotePhotos = remotePhotos
+        self.phonePhotos = phonePhotos
+        localObserver = NotificationCenter.default.addObserver(forName: .foteraLocalLibraryChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshPhoneLibrary() }
+        }
+        uploadObserver = NotificationCenter.default.addObserver(forName: .foteraUploadCatalogChanged, object: nil, queue: .main) { [weak self] note in
+            let queueAccount = note.userInfo?["account"] as? String
+            let space = note.userInfo?["shared"] as? Bool
+            Task { @MainActor in
+                guard let self, let queueAccount, let space else { return }
+                self.uploadsChanged(account: queueAccount, shared: space)
+            }
+        }
+        publishUnified()
+    }
+    deinit {
+        if let localObserver { NotificationCenter.default.removeObserver(localObserver) }
+        if let uploadObserver { NotificationCenter.default.removeObserver(uploadObserver) }
+        uploadRefreshTask?.cancel()
+    }
+    private func uploadsChanged(account queueAccount: String, shared space: Bool) {
+        guard client != nil, space == shared,
+              queueAccount == account || queueAccount == account + "|backup" else { return }
+        uploadRefreshTask?.cancel()
+        let key = cacheAccount
+        uploadRefreshTask = Task {
+            // Coalesce adjacent batches; don't lose the update if a refresh is in flight.
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            await syncTask?.value
+            guard !Task.isCancelled, cacheAccount == key else { return }
+            publishUnified() // Apply newly confirmed local/NAS links even if the count is unchanged.
+            refresh()
+            await syncTask?.value
+        }
+    }
+    func requestPhotoAccess() async {
+        _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        refreshPhoneLibrary()
+    }
+    func refreshPhoneLibrary() {
+        let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let accessChanged = access != photoAccess
+        photoAccess = access
+        phoneTask?.cancel()
+        let generation = UUID(); phoneGeneration = generation
+        guard client != nil, !shared else { phonePhotos = []; publishUnified(); return }
+        loadingPhone = LocalAssets.allowed
+        phoneTask = Task {
+            if accessChanged { await PhoneLibraryIndex.shared.invalidate() }
+            let items = await PhoneLibraryIndex.shared.photos()
+            guard generation == phoneGeneration, !Task.isCancelled else { return }
+            loadingPhone = false
+            // Coming back to the app re-checks the phone; only rebuild the timeline when something changed.
+            guard items != phonePhotos else { return }
+            phonePhotos = items; publishUnified()
+        }
+    }
+    private func publishUnified() {
+        let remote = remotePhotos, local = phonePhotos
+        let links = account.isEmpty ? [] : TransferQueue.shared(account: account).photoLinks + TransferQueue.shared(account: account + "|backup").photoLinks
+        let space = shared
+        let generation = UUID(); mergeGeneration = generation
+        Task {
+            let unified = await Task.detached(priority: .userInitiated) { UnifiedLibrary.merge(remote: remote, local: local, links: links, shared: space) }.value
+            guard generation == mergeGeneration else { return }
+            photos = unified; rebuild()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--matching-report") {
+                let target = "IMG_3288"
+                func entry(_ item: RemotePhoto) -> [String: Any] {
+                    var value: [String: Any] = ["id": item.id, "filename": item.filename, "type": item.type]
+                    value["time"] = item.time; value["localCaptureTime"] = item.localCaptureTime
+                    value["localVersion"] = item.localVersion; value["localAssetID"] = item.localAssetID
+                    value["resourceNames"] = item.localResourceNames
+                    return value
+                }
+                let selectedRemote = remote.filter { $0.filename.uppercased().contains(target) }
+                let selectedLocal = local.filter { ($0.localResourceNames ?? [$0.filename]).contains { $0.uppercased().contains(target) } }
+                let report: [String: Any] = ["build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
+                    "remoteCount": remote.count, "localCount": local.count, "mergedCount": unified.count,
+                    "shared": space, "remote": selectedRemote.map(entry), "local": selectedLocal.map(entry),
+                    "merged": unified.filter { $0.filename.uppercased().contains(target) }.map(entry),
+                    "scores": selectedRemote.flatMap { nas in selectedLocal.map { phone in
+                        ["remote": String(nas.id), "local": String(phone.id), "score": String(UnifiedLibrary.matchScore(remote: nas, local: phone) ?? -1)]
+                    } }]
+                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("fotera-match-report.json")
+                    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                }
+            }
+            #endif
+        }
+    }
     private(set) var client: DSMClient?
     private(set) var shared = false
     private var account = ""
     private var widgetTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
     private var syncGeneration = UUID()
+    private var mergeGeneration = UUID()
     private var buildGeneration = UUID()
     private var builtForDay = ""
     private var positions: [Int: Int] = [:]
@@ -51,10 +156,12 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
 
     func attach(client: DSMClient?, account: String, shared: Bool) async {
         widgetTask?.cancel(); widgetTask = nil
+        uploadRefreshTask?.cancel(); uploadRefreshTask = nil
         syncGeneration = UUID()
         syncTask?.cancel(); syncTask = nil; syncing = false
         self.client = client; self.account = account; self.shared = shared
-        apply([]); failure = nil; progress = nil; lastSynced = nil
+        phonePhotos = []; phoneGeneration = UUID(); phoneTask?.cancel()
+        apply([]); refreshPhoneLibrary(); failure = nil; progress = nil; lastSynced = nil
         FavoriteMarks.shared.replace([], loaded: false)
         guard client != nil else { return }
         let key = cacheAccount; let attachment = syncGeneration
@@ -65,6 +172,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     }
     /// Re-checks when the index is over 5 minutes old. Day labels ("Today") rebuild only after midnight.
     func refreshIfStale() {
+        refreshPhoneLibrary()
         if builtForDay != Self.today() { rebuild() }
         guard let lastSynced else { refresh(); return }
         if Date().timeIntervalSince(lastSynced) > 300 { refresh() }
@@ -76,8 +184,8 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         syncing = true; failure = nil
         let key = cacheAccount; let space = shared
         let generation = UUID(); syncGeneration = generation
-        let needsFull = force || photos.isEmpty || lastFullSync.map { Date().timeIntervalSince($0) > 6 * 3600 } ?? true
-        let known = photos
+        let needsFull = force || remotePhotos.isEmpty || lastFullSync.map { Date().timeIntervalSince($0) > 6 * 3600 } ?? true
+        let known = remotePhotos
         syncTask = Task {
             defer { if generation == syncGeneration { syncing = false; progress = nil } }
             do {
@@ -90,7 +198,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
                        try await client.count(shared: space) == total {
                         try Task.checkCancellation()
                         guard key == cacheAccount, generation == syncGeneration else { return }
-                        let changed = merged != photos
+                        let changed = merged != remotePhotos
                         if changed { apply(merged) }
                         lastSynced = Date()
                         if changed { try? await LibraryCache.shared.write(account: key, snapshot: .init(photos: merged, updated: Date())) }
@@ -107,13 +215,13 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
                     indexed += page.filter { seen.insert($0.id).inserted }
                     offset += page.count
                     // Show the newest page right away on first launch.
-                    if photos.isEmpty { apply(indexed) }
+                    if remotePhotos.isEmpty { apply(indexed) }
                     if offset > DSMClient.pageSize { progress = "Indexing \(indexed.count.formatted()) items…" }
                     if page.count < DSMClient.pageSize { break }
                 }
                 try Task.checkCancellation()
                 guard key == cacheAccount, generation == syncGeneration else { return }
-                let changed = indexed != photos
+                let changed = indexed != remotePhotos
                 apply(indexed)
                 lastSynced = Date(); lastFullSync = Date()
                 if changed { try? await LibraryCache.shared.write(account: key, snapshot: .init(photos: indexed, updated: Date())) }
@@ -151,15 +259,29 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     }
     func refreshAndWait() async {
         // Don't hold the refresh for a route check: a failed read re-checks the route and retries.
+        refreshPhoneLibrary()
         refresh()
         await syncTask?.value
+        await phoneTask?.value
     }
     /// Removes items locally after a confirmed server deletion so the grid updates immediately.
-    func remove(ids: Set<Int>) {
-        guard !ids.isEmpty else { return }
+    func remove(ids: Set<Int>, localAssetIDs: Set<String> = []) {
+        guard !ids.isEmpty || !localAssetIDs.isEmpty else { return }
+        // A refresh started before the deletion must not restore its old snapshot.
+        if !ids.isEmpty {
+            syncGeneration = UUID(); syncTask?.cancel(); syncTask = nil
+            syncing = false; progress = nil
+        }
+        if !localAssetIDs.isEmpty {
+            phoneGeneration = UUID(); phoneTask?.cancel(); phoneTask = nil
+            loadingPhone = false
+            phonePhotos.removeAll { item in
+                item.localAssetID.map(localAssetIDs.contains) ?? false
+            }
+        }
         FavoriteMarks.shared.set(Array(ids), false)
-        apply(photos.filter { !ids.contains($0.id) })
-        let key = cacheAccount; let snapshot = LibraryCache.Snapshot(photos: photos, updated: lastSynced ?? Date())
+        apply(remotePhotos.filter { !ids.contains($0.id) })
+        let key = cacheAccount; let snapshot = LibraryCache.Snapshot(photos: remotePhotos, updated: lastSynced ?? Date())
         Task { try? await LibraryCache.shared.write(account: key, snapshot: snapshot) }
     }
     /// Favorites that still exist here, newest first, found by ID lookup rather than scanning the library.
@@ -168,8 +290,8 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     }
 
     private func apply(_ items: [RemotePhoto]) {
-        photos = items
-        rebuild()
+        remotePhotos = items
+        publishUnified()
     }
     private static func today() -> String {
         let parts = Calendar.current.dateComponents([.year, .month, .day], from: Date())
@@ -260,14 +382,18 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
 
 /// Keeps rotating widget memories fresh. Only small previews are shared with the widget.
 enum WidgetMemories {
+    /// The stamp whose saved previews were already checked this launch; avoids re-reading them on every rebuild.
+    @MainActor private static var checkedStamp: String?
     @MainActor static func refresh(memories: [Memory], photos: [RemotePhoto], shared: Bool, account: String) async {
-        guard WidgetSnapshotStore.isAvailable, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
+        // Personal library only: otherwise switching to Shared Space and back replaces the widget each time.
+        guard WidgetSnapshotStore.isAvailable, !shared, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
         var local = Calendar(identifier: .gregorian)
         local.timeZone = .current
         let today = local.dateComponents([.year, .month, .day], from: Date())
         // Version the stamp so an existing adjacent-day widget selection is replaced.
         let stamp = "preview-v3-\(LibraryCache.hash(account))-\(today.year!)-\(today.month!)-\(today.day!)"
-        guard WidgetSnapshot.needsRefresh(stamp: stamp, savedStamp: UserDefaults.standard.string(forKey: "widgetMemoriesStamp"), snapshots: WidgetSnapshotStore.readMemories()) else { return }
+        guard checkedStamp != stamp else { return }
+        guard WidgetSnapshot.needsRefresh(stamp: stamp, savedStamp: UserDefaults.standard.string(forKey: "widgetMemoriesStamp"), snapshots: WidgetSnapshotStore.readMemories()) else { checkedStamp = stamp; return }
         var picks: [(String, RemotePhoto)] = memories.flatMap { memory in memory.items.filter { !$0.isVideo }.prefix(2).map { (memory.title, $0) } }
         if picks.isEmpty {
             let stills = photos.filter { !$0.isVideo }
@@ -288,7 +414,7 @@ enum WidgetMemories {
         guard !entries.isEmpty, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
         do {
             try WidgetSnapshotStore.saveMemories(entries)
-            UserDefaults.standard.set(stamp, forKey: "widgetMemoriesStamp")
+            UserDefaults.standard.set(stamp, forKey: "widgetMemoriesStamp"); checkedStamp = stamp
             WidgetCenter.shared.reloadAllTimelines()
         } catch {}
     }

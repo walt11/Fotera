@@ -120,7 +120,7 @@ struct LibraryTab: View {
         NavigationLink(destination: destination) {
             ZStack(alignment: .bottomLeading) {
                 if let cover {
-                    ThumbnailView(source: cover.thumbnailSource, shared: app.shared, size: .m)
+                    ThumbnailView(source: cover.thumbnailSource, shared: app.shared, size: .m, fallbackPhoto: cover)
                 } else {
                     Color(.secondarySystemBackground)
                 }
@@ -289,7 +289,7 @@ struct PhotoSelectionSheet: View {
     var body: some View {
         NavigationStack {
             PhotoGrid(sections: app.library.sections.compactMap { section in
-                let items = section.items.filter { !excluded.contains($0.id) }
+                let items = section.items.filter { !$0.isLocalOnly && !excluded.contains($0.id) }
                 return items.isEmpty ? nil : GridSection(id: String(section.id.timeIntervalSince1970), title: section.title, items: items)
             }, shared: app.shared, selection: $selection, showsScrubber: true)
             .overlay { if saving { ProgressView().padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
@@ -844,7 +844,7 @@ struct PhotoMapView: View {
             ForEach(clusters) { cluster in
                 Annotation("", coordinate: cluster.coordinate) {
                     Button { selected = cluster } label: {
-                        ThumbnailView(source: cluster.items.first?.thumbnailSource, shared: app.shared, size: .sm)
+                        ThumbnailView(source: cluster.items.first?.thumbnailSource, shared: app.shared, size: .sm, fallbackPhoto: cluster.items.first)
                             .frame(width: 48, height: 48)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white, lineWidth: 2))

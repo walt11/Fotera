@@ -1,4 +1,6 @@
 import Foundation
+import Photos
+import CryptoKit
 
 /// Synology Photos stores capture times as wall-clock values encoded as if they were UTC.
 /// Always format and group them with this calendar, never the device time zone.
@@ -38,6 +40,13 @@ struct RemotePhoto: Codable, Identifiable, Sendable, Hashable {
     /// Share token for items browsed through an album shared with you (not part of the NAS response).
     var passphrase: String?
 
+    /// Present only in the in-memory unified library; never sent to DSM.
+    var localAssetID: String? = nil
+    var localVersion: Double? = nil
+    var localCaptureTime: Double? = nil
+    var localResourceNames: [String]? = nil
+    var isLocalOnly: Bool { id < 0 && localAssetID != nil }
+
     struct Additional: Codable, Sendable, Hashable {
         var thumbnail: Thumbnail?
         var gps: GPS?
@@ -68,7 +77,7 @@ struct RemotePhoto: Codable, Identifiable, Sendable, Hashable {
         additional?.thumbnail.map { ThumbnailSource(id: $0.unit_id ?? id, cacheKey: $0.cache_key, kind: "unit", passphrase: passphrase) }
     }
     static func == (lhs: RemotePhoto, rhs: RemotePhoto) -> Bool {
-        lhs.id == rhs.id && lhs.additional?.thumbnail?.cache_key == rhs.additional?.thumbnail?.cache_key
+        lhs.id == rhs.id && lhs.additional?.thumbnail?.cache_key == rhs.additional?.thumbnail?.cache_key && lhs.localAssetID == rhs.localAssetID && lhs.localVersion == rhs.localVersion && lhs.time == rhs.time && lhs.filename == rhs.filename && lhs.type == rhs.type
     }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
@@ -214,5 +223,141 @@ enum LocalLibrarySearch {
             let text = photo.filename + " " + dateText + " " + (photo.date.map(PhotoTime.monthTitle) ?? "")
             return terms.allSatisfy { text.localizedStandardContains($0) }
         }
+    }
+}
+
+
+/// One metadata scan per Photos change, off the main thread. No originals are downloaded.
+actor PhoneLibraryIndex {
+    static let shared = PhoneLibraryIndex()
+    private var cached: [RemotePhoto]?
+    /// Per-asset results, reused while an asset is unmodified: reading resources is the slow part.
+    private var entries: [String: RemotePhoto] = [:]
+    func invalidate() { cached = nil }
+    func photos() -> [RemotePhoto] {
+        guard LocalAssets.allowed else { cached = nil; entries = [:]; return [] }
+        if let cached { return cached }
+        LocalLibraryObserver.shared.start()
+        var items: [RemotePhoto] = []
+        var fresh: [String: RemotePhoto] = [:]
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+        let previous = entries
+        PHAsset.fetchAssets(with: options).enumerateObjects { asset, _, _ in
+            if let known = previous[asset.localIdentifier], known.localVersion == asset.modificationDate?.timeIntervalSince1970 {
+                items.append(known); fresh[asset.localIdentifier] = known; return
+            }
+            let resources = PHAssetResource.assetResources(for: asset)
+            let resource = resources.first { $0.type == (asset.mediaType == .video ? .video : .photo) } ?? resources.first
+            guard let resource else { return }
+            let date = asset.creationDate
+            // DSM dates are wall-clock UTC; encode phone dates in the same coordinate system.
+            let wall = date.map { $0.timeIntervalSince1970 + Double(TimeZone.current.secondsFromGMT(for: $0)) }
+            var item = RemotePhoto(id: UnifiedLibrary.localID(asset.localIdentifier), filename: resource.originalFilename,
+                                   time: wall, type: asset.mediaType == .video ? "video" : (asset.mediaSubtypes.contains(.photoLive) ? "live" : "photo"))
+            item.localAssetID = asset.localIdentifier
+            item.localVersion = asset.modificationDate?.timeIntervalSince1970
+            item.localCaptureTime = asset.creationDate?.timeIntervalSince1970
+            item.localResourceNames = resources.filter {
+                asset.mediaType == .video ? [.video, .fullSizeVideo].contains($0.type) : [.photo, .fullSizePhoto, .alternatePhoto].contains($0.type)
+            }.map(\.originalFilename)
+            item.additional = .init(thumbnail: nil, gps: asset.location.map { .init(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) },
+                                    video_meta: asset.mediaType == .video ? .init(duration: Int(asset.duration * 1000)) : nil)
+            items.append(item); fresh[asset.localIdentifier] = item
+        }
+        cached = items; entries = fresh
+        return items
+    }
+}
+
+/// Conservative one-to-one matching for display only. Destructive operations still verify bytes.
+enum UnifiedLibrary {
+    static func localID(_ identifier: String) -> Int {
+        let bytes = SHA256.hash(data: Data(identifier.utf8))
+        let value = bytes.prefix(7).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        return -Int(value) - 1
+    }
+    private static func stem(_ name: String) -> String { (name.lowercased() as NSString).deletingPathExtension }
+    /// Prefer the displayed wall time, then UTC, then a plausible capture-time-zone offset.
+    /// NAS imports can retain UTC or the camera's wall clock; PhotoKit stores absolute time.
+    static func matchScore(remote: RemotePhoto, local: RemotePhoto) -> Int? {
+        guard remote.passphrase == nil, remote.isVideo == local.isVideo,
+              let time = remote.time, let localTime = local.time else { return nil }
+        let names = local.localResourceNames ?? [local.filename]
+        let exactName = names.contains { $0.caseInsensitiveCompare(remote.filename) == .orderedSame }
+        guard exactName || names.contains(where: { stem($0) == stem(remote.filename) }) else { return nil }
+        let nameScore = exactName ? 10 : 0
+        if abs(time - localTime) <= 2 { return 300 + nameScore }
+        let utc = local.localCaptureTime ?? localTime
+        if abs(time - utc) <= 2 { return 200 + nameScore }
+        let difference = abs(time - utc)
+        let remainder = difference.truncatingRemainder(dividingBy: 900)
+        guard difference <= 14 * 3600 + 2, min(remainder, 900 - remainder) <= 2 else { return nil }
+        return 100 + nameScore
+    }
+    static func merge(remote: [RemotePhoto], local: [RemotePhoto], links: [UploadPhotoLink] = [], shared: Bool = false) -> [RemotePhoto] {
+        var byStem: [String: Set<Int>] = [:], byIdentifier: [String: Int] = [:]
+        for (index, item) in local.enumerated() {
+            if let id = item.localAssetID { byIdentifier[id] = index }
+            for name in item.localResourceNames ?? [item.filename] { byStem[stem(name), default: []].insert(index) }
+        }
+        var linked: [Int: Set<Int>] = [:]
+        for link in links where link.shared == shared {
+            guard let index = byIdentifier[link.localID],
+                  (local[index].localVersion ?? 0) <= link.created.timeIntervalSince1970 + 2 else { continue }
+            linked[link.remoteID, default: []].insert(index)
+        }
+        // Resolve both directions before merging: iteration order must never choose a photo.
+        var proposals: [Int: (local: Int, score: Int)] = [:]
+        var reverse: [Int: [(remote: Int, score: Int)]] = [:]
+        for (index, item) in remote.enumerated() where item.passphrase == nil {
+            var candidates: [(local: Int, score: Int)] = []
+            if let known = linked[item.id], known.count == 1, let phone = known.first,
+               item.isVideo == local[phone].isVideo {
+                candidates = [(phone, 1000)]
+            } else {
+                for phone in byStem[stem(item.filename)] ?? [] {
+                    if let score = matchScore(remote: item, local: local[phone]) { candidates.append((phone, score)) }
+                }
+            }
+            guard let best = candidates.map(\.score).max() else { continue }
+            let winners = candidates.filter { $0.score == best }
+            guard winners.count == 1, let winner = winners.first else { continue }
+            proposals[index] = winner
+            reverse[winner.local, default: []].append((index, best))
+        }
+        var matched = Set<Int>()
+        var result = remote.enumerated().map { index, item -> RemotePhoto in
+            guard let proposal = proposals[index], let choices = reverse[proposal.local],
+                  let best = choices.map(\.score).max(), proposal.score == best,
+                  choices.filter({ $0.score == best }).count == 1 else { return item }
+            let phone = local[proposal.local]
+            var merged = item
+            merged.localAssetID = phone.localAssetID; merged.localVersion = phone.localVersion
+            merged.localCaptureTime = phone.localCaptureTime; merged.localResourceNames = phone.localResourceNames
+            matched.insert(proposal.local)
+            return merged
+        }
+        result += local.enumerated().filter { !matched.contains($0.offset) }.map(\.element)
+        return result.sorted { lhs, rhs in
+            if lhs.time != rhs.time { return (lhs.time ?? -.infinity) > (rhs.time ?? -.infinity) }
+            return lhs.id > rhs.id
+        }
+    }
+}
+
+/// Account-scoped upload identity, retained beyond the short visible transfer history.
+struct UploadPhotoLink: Codable, Sendable {
+    let remoteID: Int
+    let localID: String
+    let shared: Bool
+    let created: Date
+    init?(record: TransferRecord) {
+        guard record.state.isFinished, let remote = record.remoteID,
+              let source = record.sourceID, let identifier = PhoneDeletionMatch.sourceAssetID(source) else { return nil }
+        remoteID = remote; localID = identifier; shared = record.shared; created = record.created
+    }
+    init(remoteID: Int, localID: String, shared: Bool, created: Date) {
+        self.remoteID = remoteID; self.localID = localID; self.shared = shared; self.created = created
     }
 }

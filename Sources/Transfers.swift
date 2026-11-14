@@ -50,6 +50,9 @@ struct TransferRecord: Codable, Identifiable {
     /// Sources whose NAS copy was byte-verified. Only these count as safe to remove from the iPhone.
     private(set) var verifiedSources = Set<String>()
     private var activeSources = Set<String>()
+    private(set) var photoLinks: [UploadPhotoLink] = []
+    private let account: String
+    private var changedSpaces = Set<Bool>()
     private let directory: URL
     private var task: Task<Void, Never>?
     private var events = 0
@@ -73,6 +76,7 @@ struct TransferRecord: Codable, Identifiable {
         return queue
     }
     init(account: String) {
+        self.account = account
         directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transfers/" + LibraryCache.hash(account), isDirectory: true)
         do {
@@ -96,6 +100,10 @@ struct TransferRecord: Codable, Identifiable {
             if let data = try? Data(contentsOf: directory.appendingPathComponent("duplicate-index.json")) {
                 duplicateIndex = (try? JSONDecoder().decode([String: Set<String>].self, from: data)) ?? [:]
             }
+            if let data = try? Data(contentsOf: directory.appendingPathComponent("photo-links.json")) {
+                photoLinks = (try? JSONDecoder().decode([UploadPhotoLink].self, from: data)) ?? []
+            }
+            for record in records { rememberPhotoLink(record) }
             rebuildIndex()
         } catch { failure = "Couldn’t restore the upload queue. " + error.localizedDescription }
         observer = NotificationCenter.default.addObserver(forName: .foteraTransferFinished, object: nil, queue: .main) { [weak self] _ in
@@ -124,8 +132,16 @@ struct TransferRecord: Codable, Identifiable {
     }
     func flush() { if pendingWrite != nil { persist(immediate: true) } }
     static func flushAll() { for queue in instances.values { queue.flush() } }
+    private func rememberPhotoLink(_ record: TransferRecord) {
+        guard let link = UploadPhotoLink(record: record) else { return }
+        photoLinks.removeAll { $0.remoteID == link.remoteID && $0.shared == link.shared && $0.localID == link.localID }
+        photoLinks.append(link)
+    }
     private func writeNow() {
-        do { try JSONEncoder().encode(records).write(to: directory.appendingPathComponent("queue.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
+        do {
+            try JSONEncoder().encode(records).write(to: directory.appendingPathComponent("queue.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try JSONEncoder().encode(photoLinks).write(to: directory.appendingPathComponent("photo-links.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
         catch { failure = "Couldn’t save the upload queue. " + error.localizedDescription }
     }
     private func rebuildIndex() { activeSources = Set(records.filter { !$0.state.isFinished }.compactMap(\.sourceID)) }
@@ -192,6 +208,8 @@ struct TransferRecord: Codable, Identifiable {
     }
     private func finish(_ index: Int, state: TransferState, message: String) {
         records[index].state = state; records[index].message = message; records[index].updated = Date()
+        rememberPhotoLink(records[index])
+        changedSpaces.insert(records[index].shared)
         try? FileManager.default.removeItem(at: source(records[index]))
         UploadReceipt.remove(records[index].id)
         markCompleted(records[index].sourceID)
@@ -227,7 +245,16 @@ struct TransferRecord: Codable, Identifiable {
     @discardableResult
     func process(client: DSMClient, wifiOnly: Bool, verify: Bool, verifyVideos: Bool = true, deadline: Date? = nil,
                  maxInFlight: Int = 4, verifyAllowed: Bool = true) async -> Bool {
-        defer { flush() }
+        defer {
+            flush()
+            // Publish once per processing batch, after upload links have been saved.
+            // This also covers background receipts and uploads skipped as duplicates.
+            for space in changedSpaces {
+                NotificationCenter.default.post(name: .foteraUploadCatalogChanged, object: nil,
+                    userInfo: ["account": account, "shared": space])
+            }
+            changedSpaces.removeAll()
+        }
         var networkFailures = 0
         while !Task.isCancelled {
             if let deadline, Date() > deadline { break }
@@ -827,4 +854,8 @@ struct DestinationPicker: View {
             folders = result.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         } catch { failure = error.localizedDescription }
     }
+}
+
+extension Notification.Name {
+    static let foteraUploadCatalogChanged = Notification.Name("FoteraUploadCatalogChanged")
 }

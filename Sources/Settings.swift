@@ -1,5 +1,6 @@
 import SwiftUI
 import WidgetKit
+import Photos
 
 struct SettingsView: View {
     @EnvironmentObject private var app: AppModel
@@ -81,6 +82,11 @@ struct SettingsView: View {
         Section {
             Picker("Appearance", selection: $appearance) {
                 ForEach(AppearanceSetting.allCases) { Text($0.rawValue).tag($0.rawValue) }
+            }
+            Button("iPhone Photos access") {
+                if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+                    Task { await app.library.requestPhotoAccess() }
+                } else if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
             Toggle("Always load originals", isOn: $alwaysLoadOriginals)
             Picker("Video quality", selection: $videoQuality) {

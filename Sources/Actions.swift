@@ -29,7 +29,15 @@ import Photos
         guard let client = app.client, !items.isEmpty else { return }
         let shared = app.shared
         run(value ? "Adding to favorites…" : "Removing from favorites…") {
-            try await client.setFavorite(ids: items.map(\.id), shared: shared, value: value)
+            let remote = items.filter { !$0.isLocalOnly }
+            if !remote.isEmpty { try await client.setFavorite(ids: remote.map(\.id), shared: shared, value: value) }
+            let local = items.filter(\.isLocalOnly).compactMap(\.localAssetID)
+            if !local.isEmpty {
+                let assets = PHAsset.fetchAssets(withLocalIdentifiers: local, options: nil)
+                try await PHPhotoLibrary.shared().performChanges {
+                    assets.enumerateObjects { asset, _, _ in PHAssetChangeRequest(for: asset).isFavorite = value }
+                }
+            }
             FavoriteMarks.shared.set(items.map(\.id), value)
             Haptics.success()
             completion?()
@@ -38,6 +46,7 @@ import Photos
     }
     func add(_ items: [RemotePhoto], to album: RemoteAlbum?, newName: String?, app: AppModel, completion: (() -> Void)? = nil) {
         guard let client = app.client, !items.isEmpty else { return }
+        guard !items.contains(where: \.isLocalOnly) else { message = "Back up iPhone-only photos before adding them to a NAS album."; return }
         run("Updating album…") {
             if let album {
                 try await client.changeAlbumItems(id: album.id, items: items.map(\.id), adding: true)
@@ -68,7 +77,7 @@ import Photos
             for (index, item) in items.enumerated() {
                 try Task.checkCancellation()
                 if items.count > 1 { self.busy = "Downloading \(index + 1) of \(items.count)…" }
-                let file = try await client.original(item, shared: shared, albumID: albumID, useOfflineCache: true)
+                let file = try await Self.shareOriginal(item, client: client, shared: shared, albumID: albumID)
                 // Give shared files their real names instead of temporary identifiers.
                 let named = file.deletingLastPathComponent().appendingPathComponent(UUID().uuidString, isDirectory: true)
                 try FileManager.default.createDirectory(at: named, withIntermediateDirectories: true)
@@ -95,8 +104,31 @@ import Photos
             return items.count == 1 ? "Saved to Photos." : "Saved \(items.count) items to Photos."
         }
     }
+    private static func shareOriginal(_ item: RemotePhoto, client: DSMClient, shared: Bool, albumID: Int?) async throws -> URL {
+        if let identifier = item.localAssetID,
+           let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject {
+            let resources = PHAssetResource.assetResources(for: asset)
+            let preferred: PHAssetResourceType = item.isVideo ? .fullSizeVideo : .fullSizePhoto
+            if let resource = resources.first(where: { $0.type == preferred }) ?? resources.first(where: { $0.type == (item.isVideo ? .video : .photo) }) {
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension((resource.originalFilename as NSString).pathExtension)
+                let options = PHAssetResourceRequestOptions(); options.isNetworkAccessAllowed = true
+                do {
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        PHAssetResourceManager.default().writeData(for: resource, toFile: file, options: options) { error in
+                            if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                        }
+                    }
+                    return file
+                } catch { try? FileManager.default.removeItem(at: file); throw error }
+            }
+        }
+        guard !item.isLocalOnly else { throw MediaFailure.unsupportedPhoto }
+        return try await client.original(item, shared: shared, albumID: albumID, useOfflineCache: true)
+    }
     /// Saves an original, keeping Live Photos paired with their motion resource.
     static func save(_ item: RemotePhoto, client: DSMClient, shared: Bool, albumID: Int?) async throws {
+        if let identifier = item.localAssetID, PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject != nil { return }
+        guard !item.isLocalOnly else { throw MediaFailure.unsupportedPhoto }
         var package: OriginalPackage?
         var file: URL?
         defer {
@@ -134,38 +166,32 @@ import Photos
     func requestDelete(_ items: [RemotePhoto], app: AppModel) {
         guard let client = app.client, !items.isEmpty, busy == nil else { return }
         let shared = app.shared, account = app.account
-        busy = "Checking iPhone copies…"
+        busy = "Checking recycle bin…"
         deletePlan = nil
         Task {
             defer { busy = nil }
-            do {
-                var access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-                if access == .notDetermined { access = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
-                let records = app.manualUploads.records
-                var local: [String: PHAsset] = [:]
-                var matchedItems = 0
-                if access == .authorized || access == .limited {
-                    for (index, item) in items.enumerated() {
-                        try Task.checkCancellation()
-                        busy = "Checking iPhone copies \(index + 1) of \(items.count)…"
-                        let matches = try await PhoneDeletionMatch.assets(for: item, shared: shared, client: client, records: records)
-                        if !matches.isEmpty { matchedItems += 1 }
-                        for asset in matches { local[asset.localIdentifier] = asset }
-                    }
+            // Only quick candidate lookups here; the byte comparison runs after "NAS and iPhone" is chosen,
+            // so a plain NAS delete never downloads originals. Uses existing Photos access only.
+            let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            let records = app.manualUploads.records + (BackupController.shared.queue?.records ?? [])
+            var candidates: [Int: [PHAsset]] = [:]
+            if access == .authorized || access == .limited {
+                for item in items {
+                    let found = await PhoneDeletionMatch.candidates(for: item, shared: shared, records: records)
+                    if !found.isEmpty { candidates[item.id] = found }
                 }
-                let enabled = try? await client.recycleBinEnabled(shared: shared)
-                guard app.client === client, app.account == account, app.shared == shared else { return }
-                recycleBinOn = enabled
-                let assets = Array(local.values)
-                deletePlan = PhotoDeletionPlan(client: client, account: account, shared: shared,
-                    itemIDs: Set(items.map(\.id)), assets: assets)
-                deletingPhoneCopies = !assets.isEmpty
-                deleteWarning = PhotoDeletionPlan.warning(nasCount: items.count, phoneCount: assets.count,
-                    unmatchedCount: items.count - matchedItems, recycleBin: enabled, access: access)
-                confirmingDelete = items
-            } catch {
-                message = "Couldn’t verify the iPhone copies. Nothing was deleted. " + error.localizedDescription
             }
+            let remoteCount = items.filter { !$0.isLocalOnly }.count
+            let enabled = remoteCount > 0 ? try? await client.recycleBinEnabled(shared: shared) : nil
+            guard app.client === client, app.account == account, app.shared == shared else { return }
+            recycleBinOn = enabled
+            let phoneCount = Set(candidates.values.flatMap { $0.map(\.localIdentifier) }).count
+            deletePlan = PhotoDeletionPlan(client: client, account: account, shared: shared,
+                itemIDs: Set(items.map(\.id)), candidates: candidates)
+            deletingPhoneCopies = phoneCount > 0
+            deleteWarning = remoteCount == 0 ? "This also removes them from iCloud Photos if it’s on."
+                : PhotoDeletionPlan.warning(phoneCount: phoneCount, unmatchedCount: items.count - candidates.count, access: access)
+            confirmingDelete = items
         }
     }
     func delete(_ items: [RemotePhoto], includingPhone: Bool, app: AppModel, completion: @escaping () -> Void) {
@@ -176,32 +202,52 @@ import Photos
             message = "The account or photo space changed. Select the photos again."; return
         }
         run("Deleting…") {
+            // Confirm phone copies byte for byte before deleting anything, so a failed check deletes nothing.
+            var verified: [PHAsset] = []
+            if includingPhone {
+                for (index, item) in items.enumerated() {
+                    guard let candidates = plan.candidates[item.id] else { continue }
+                    if item.isLocalOnly { verified += candidates; continue }
+                    self.busy = "Checking iPhone copy \(index + 1) of \(items.count)…"
+                    do { verified += try await PhoneDeletionMatch.verified(item, candidates: candidates, shared: plan.shared, client: plan.client) }
+                    catch { throw DeletionFailure.unverified(error.localizedDescription) }
+                }
+                self.busy = "Deleting…"
+            }
+            let candidateCount = Set(plan.candidates.values.flatMap { $0.map(\.localIdentifier) }).count
             // Do not delete phone copies if the NAS operation fails.
-            try await plan.client.deletePhotos(ids: items.map(\.id), shared: plan.shared, permanent: true)
+            let remoteIDs = items.filter { !$0.isLocalOnly }.map(\.id)
+            if !remoteIDs.isEmpty { try await plan.client.deletePhotos(ids: remoteIDs, shared: plan.shared, permanent: true) }
             guard app.client === plan.client, app.account == plan.account, app.shared == plan.shared else {
                 return "Deleted from the NAS. The account or photo space changed, so iPhone copies were left untouched."
             }
-            app.library.remove(ids: plan.itemIDs)
+            app.library.remove(ids: Set(remoteIDs))
             var result: String?
-            if includingPhone && !plan.assets.isEmpty {
+            if includingPhone && candidateCount > 0 {
                 // A photo edited while confirmation was open needs a new match check.
-                let fresh = PHAsset.fetchAssets(withLocalIdentifiers: plan.assets.map(\.localIdentifier), options: nil)
+                let fresh = PHAsset.fetchAssets(withLocalIdentifiers: verified.map(\.localIdentifier), options: nil)
                 var removable: [PHAsset] = []
                 fresh.enumerateObjects { asset, _, _ in
-                    if let old = plan.assets.first(where: { $0.localIdentifier == asset.localIdentifier }),
+                    if let old = verified.first(where: { $0.localIdentifier == asset.localIdentifier }),
                        old.modificationDate == asset.modificationDate { removable.append(asset) }
                 }
                 do {
                     if !removable.isEmpty {
                         try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.deleteAssets(removable as NSArray) }
                     }
-                    if removable.count != plan.assets.count {
-                        result = "Deleted from the NAS. Some iPhone copies changed or became unavailable and were left untouched."
+                    if removable.count != candidateCount {
+                        result = "Deleted from the NAS. iPhone copies that weren’t identical, or changed, were left untouched."
+                    }
+                    // Apply the confirmed phone deletion directly; do not wait for Photos'
+                    // observer or a manual refresh to remove the local timeline copies.
+                    if app.client === plan.client, app.account == plan.account, app.shared == plan.shared {
+                        app.library.remove(ids: [], localAssetIDs: Set(removable.map(\.localIdentifier)))
                     }
                     await LocalAssets.shared.clear()
+                    await PhoneLibraryIndex.shared.invalidate()
                     NotificationCenter.default.post(name: .foteraLocalLibraryChanged, object: nil)
                 } catch {
-                    result = "Deleted from the NAS, but the iPhone copies were not deleted. The Photos request was cancelled or could not be completed. " + error.localizedDescription
+                    result = (remoteIDs.isEmpty ? "The iPhone photos were not deleted. " : "Deleted from the NAS, but the iPhone copies were not deleted. ") + error.localizedDescription
                 }
             }
             if result == nil { Haptics.success(); completion() }
@@ -252,9 +298,12 @@ struct ActionRunnerPresenter: ViewModifier {
             }
             .alert(deleteTitle, isPresented: Binding(get: { runner.confirmingDelete != nil }, set: { if !$0 { runner.confirmingDelete = nil } })) {
                 Button("Cancel", role: .cancel) {}
-                Button("NAS only", role: .destructive) { confirmDelete(includingPhone: false) }
-                Button("NAS and iPhone", role: .destructive) { confirmDelete(includingPhone: true) }
-                    .disabled(!runner.deletingPhoneCopies)
+                if runner.confirmingDelete?.contains(where: { !$0.isLocalOnly }) == true {
+                    Button("NAS only", role: .destructive) { confirmDelete(includingPhone: false) }
+                }
+                if runner.deletingPhoneCopies {
+                    Button(runner.confirmingDelete?.allSatisfy(\.isLocalOnly) == true ? "Delete from iPhone" : "NAS and iPhone", role: .destructive) { confirmDelete(includingPhone: true) }
+                }
             } message: { Text(runner.deleteWarning) }
     }
     private func confirmDelete(includingPhone: Bool) {
@@ -263,8 +312,13 @@ struct ActionRunnerPresenter: ViewModifier {
         runner.delete(items, includingPhone: includingPhone, app: app, completion: afterChange)
     }
     private var deleteTitle: String {
-        let count = runner.confirmingDelete?.count ?? 0
-        return count == 1 ? "Delete photo?" : "Delete \(count) items?"
+        // Keeps the question you chose earlier: it says plainly where the items go.
+        let items = runner.confirmingDelete ?? []
+        let target = items.count == 1 ? "this item" : "these \(items.count) items"
+        if !items.isEmpty, items.allSatisfy(\.isLocalOnly) { return "Are you sure you want to delete \(target) from your iPhone?" }
+        return runner.recycleBinOn == true
+            ? "Are you sure you want to move \(target) to the recycle bin?"
+            : "Are you sure you want to permanently delete \(target)?"
     }
 }
 extension View {
@@ -330,23 +384,26 @@ struct AlbumPicker: View {
 }
 
 
+enum DeletionFailure: LocalizedError {
+    case unverified(String)
+    var errorDescription: String? {
+        if case .unverified(let reason) = self { return "Couldn’t check the iPhone copies, so nothing was deleted. " + reason }
+        return nil
+    }
+}
 private struct PhotoDeletionPlan {
     let client: DSMClient
     let account: String
     let shared: Bool
     let itemIDs: Set<Int>
-    let assets: [PHAsset]
+    /// Likely phone copies per item; NAS items are byte-checked before any deletion.
+    let candidates: [Int: [PHAsset]]
 
-    static func warning(nasCount: Int, phoneCount: Int, unmatchedCount: Int, recycleBin: Bool?, access: PHAuthorizationStatus) -> String {
-        var text = recycleBin == true ? "NAS copies go to the recycle bin." : "NAS deletion may be permanent."
-        if phoneCount > 0 {
-            text += " “NAS and iPhone” also removes \(phoneCount) matching iPhone \(phoneCount == 1 ? "copy" : "copies"), including from iCloud Photos if enabled. iOS will ask you to confirm."
-            if unmatchedCount > 0 || access == .limited { text += " Other phone copies remain." }
-        } else {
-            text += access != .authorized && access != .limited
-                ? " Allow Photos access to also delete iPhone copies."
-                : " No verified iPhone copies found."
-        }
+    /// The title already says whether the NAS copy goes to the recycle bin; this only covers the iPhone.
+    static func warning(phoneCount: Int, unmatchedCount: Int, access: PHAuthorizationStatus) -> String {
+        guard phoneCount > 0 else { return "" }
+        var text = "“NAS and iPhone” also removes \(phoneCount) iPhone \(phoneCount == 1 ? "copy" : "copies") after checking \(phoneCount == 1 ? "it’s" : "they’re") identical, including from iCloud Photos if it’s on."
+        if unmatchedCount > 0 || access == .limited { text += " Other items stay on the iPhone." }
         return text
     }
 }
@@ -362,19 +419,26 @@ enum PhoneDeletionMatch {
     static func sameContent(remote: Set<String>, local: String) -> Bool {
         !local.isEmpty && remote.contains(local)
     }
-    @MainActor static func assets(for item: RemotePhoto, shared: Bool, client: DSMClient, records: [TransferRecord]) async throws -> [PHAsset] {
-        var candidates = Set(records.filter { $0.shared == shared && $0.remoteID == item.id }
-            .compactMap { $0.sourceID.flatMap(sourceAssetID) })
-        if let id = await LocalAssets.shared.identifier(for: item) { candidates.insert(id) }
+    /// Phone assets that are probably this item: upload records first, then filename and capture time.
+    @MainActor static func candidates(for item: RemotePhoto, shared: Bool, records: [TransferRecord]) async -> [PHAsset] {
+        var identifiers = Set<String>()
+        if item.isLocalOnly { if let id = item.localAssetID { identifiers.insert(id) } }
+        else {
+            identifiers.formUnion(records.filter { $0.shared == shared && $0.remoteID == item.id }.compactMap { $0.sourceID.flatMap(sourceAssetID) })
+            if let id = await LocalAssets.shared.identifier(for: item) { identifiers.insert(id) }
+        }
+        guard !identifiers.isEmpty else { return [] }
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: Array(identifiers), options: nil)
+        return (0..<fetched.count).map { fetched.object(at: $0) }
+    }
+    /// Downloads the NAS original and keeps only phone assets with a byte-identical resource.
+    @MainActor static func verified(_ item: RemotePhoto, candidates: [PHAsset], shared: Bool, client: DSMClient) async throws -> [PHAsset] {
         guard !candidates.isEmpty else { return [] }
-        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: Array(candidates), options: nil)
-        guard fetched.count > 0 else { return [] }
         let file = try await (item.isLive ? client.livePackage(item, shared: shared) : client.original(item, shared: shared))
         defer { try? FileManager.default.removeItem(at: file) }
         let hashes = try await TransferQueue.originalDigests(file, live: item.isLive)
         var assets: [PHAsset] = []
-        for index in 0..<fetched.count {
-            let asset = fetched.object(at: index)
+        for asset in candidates {
             for resource in PHAssetResource.assetResources(for: asset) where
                 [.photo, .video, .pairedVideo, .alternatePhoto, .fullSizePhoto, .fullSizeVideo, .fullSizePairedVideo].contains(resource.type) {
                 try Task.checkCancellation()
@@ -398,7 +462,7 @@ struct DeleteWarningPreview: View {
             .actionRunner(runner)
             .task {
                 runner.deletingPhoneCopies = true
-                runner.deleteWarning = PhotoDeletionPlan.warning(nasCount: 2, phoneCount: 2, unmatchedCount: 0, recycleBin: true, access: .authorized)
+                runner.deleteWarning = PhotoDeletionPlan.warning(phoneCount: 2, unmatchedCount: 0, access: .authorized)
                 runner.confirmingDelete = [RemotePhoto(id: -1, filename: "Preview", time: nil, type: "photo", additional: nil)]
             }
     }

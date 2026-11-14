@@ -45,7 +45,7 @@ struct UploadReceipt: Codable {
 /// The background session owns file transfers so they continue while Fotera is suspended or terminated.
 final class BackgroundUploads: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = BackgroundUploads()
-    static let identifier = (Bundle.main.bundleIdentifier ?? "PhotoHarbor") + ".uploads"
+    static let identifier = (Bundle.main.bundleIdentifier ?? "net.jwalter.PhotoHarbor") + ".uploads"
     private let lock = NSLock()
     private var bytes: [Int: Data] = [:]
     private var samples: [Int: (Date, Int64)] = [:]

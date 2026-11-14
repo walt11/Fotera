@@ -47,6 +47,9 @@
 		000000000000000000120007 /* FoteraShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 000000000000000000120003 /* FoteraShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		00000000000000000012000F /* Sources/WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000B01 /* Sources/WidgetSnapshot.swift */; };
 		000000000000000000130003 /* Tests/FoteraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000130001 /* Tests/FoteraTests.swift */; };
+		000000000000000000160002 = {isa = PBXBuildFile; fileRef = 000000000000000000160001; };
+		000000000000000000160004 = {isa = PBXBuildFile; fileRef = 000000000000000000160003; };
+		000000000000000000160006 = {isa = PBXBuildFile; fileRef = 000000000000000000160005; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -126,6 +129,9 @@
 		000000000000000000120003 /* FoteraShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = FoteraShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000130001 /* Tests/FoteraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/FoteraTests.swift; sourceTree = "<group>"; };
 		000000000000000000130002 /* FoteraTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = FoteraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000160001 = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		000000000000000000160003 = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "Widget/PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		000000000000000000160005 = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "Share/PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -182,6 +188,9 @@
 				000000000000000000000A05 /* Sources/Backup.swift */,
 				000000000000000000000A03 /* Sources/Transfers.swift */,
 				000000000000000000000A01 /* Sources/LibraryCache.swift */,
+				000000000000000000160001 /* PrivacyInfo.xcprivacy */,
+				000000000000000000160003 /* Widget/PrivacyInfo.xcprivacy */,
+				000000000000000000160005 /* Share/PrivacyInfo.xcprivacy */,
 				000000000000000000000901 /* Assets.xcassets */,
 				00000000000000000000000A /* Sources/FoteraApp.swift */,
 				00000000000000000000000B /* Sources/DSMClient.swift */,
@@ -221,6 +230,7 @@
 			buildConfigurationList = 000000000000000000000B11 /* Build configuration list for PBXNativeTarget "FoteraMemories" */;
 			buildPhases = (
 				000000000000000000000B09 /* Sources */,
+				000000000000000000160007 /* Privacy resources */,
 			);
 			buildRules = (
 			);
@@ -236,6 +246,7 @@
 			buildConfigurationList = 00000000000000000012000A /* Build configuration list for PBXNativeTarget "FoteraShare" */;
 			buildPhases = (
 				000000000000000000120008 /* Sources */,
+				000000000000000000160008 /* Privacy resources */,
 			);
 			buildRules = (
 			);
@@ -325,9 +336,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000902 /* Assets.xcassets in Resources */,
+				000000000000000000160002,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		000000000000000000160007 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000160004,); runOnlyForDeploymentPostprocessing = 0; };
+		000000000000000000160008 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000160006,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -449,14 +463,14 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Simulator.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Fotera;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your Synology photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save downloaded originals to your photo library.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Back up the photos and videos you choose to your Synology NAS.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "View your iPhone photos alongside your NAS library and back up the photos and videos you choose.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
@@ -479,14 +493,14 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Simulator.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Fotera;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your Synology photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save downloaded originals to your photo library.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Back up the photos and videos you choose to your Synology NAS.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "View your iPhone photos alongside your NAS library and back up the photos and videos you choose.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
@@ -508,11 +522,11 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Widget/Simulator.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Widget/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Fotera Photo";
+				INFOPLIST_KEY_CFBundleDisplayName = "Fotera Widgets";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Memories;
@@ -535,11 +549,11 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Widget/Simulator.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Widget/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Fotera Photo";
+				INFOPLIST_KEY_CFBundleDisplayName = "Fotera Widgets";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.PhotoHarbor.Memories;
@@ -561,7 +575,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Share/Simulator.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Share/Info.plist;
@@ -588,7 +602,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Share/Simulator.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Share/Info.plist;

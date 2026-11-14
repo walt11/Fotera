@@ -13,6 +13,154 @@ final class FoteraTests: XCTestCase {
         return item
     }
 
+    @MainActor
+    func testDeletionUpdatesTimelineWithoutRefresh() async throws {
+        var local = photo(-1); local.localAssetID = "phone-a"
+        let store = LibraryStore(remotePhotos: [photo(42)], phonePhotos: [local])
+        store.remove(ids: [42])
+        store.remove(ids: [], localAssetIDs: ["phone-a"])
+        // Let pending merges and section builds finish: neither may restore old photos.
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(store.photos.isEmpty)
+        XCTAssertTrue(store.gridSections.isEmpty)
+        XCTAssertTrue(store.remotePhotos.isEmpty)
+    }
+
+    @MainActor
+    func testNASOnlyDeletionKeepsPhoneCopyAndGroupingDoesNotDropUpdate() async throws {
+        var local = photo(-1); local.localAssetID = "phone-a"
+        let store = LibraryStore(remotePhotos: [photo(42)], phonePhotos: [local])
+        store.remove(ids: [42])
+        store.grouping = .month
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(store.photos.map(\.id), [-1])
+        XCTAssertEqual(store.sections.flatMap(\.items).map(\.id), [-1])
+        XCTAssertTrue(store.remotePhotos.isEmpty)
+    }
+
+    @MainActor
+    func testPhoneOnlyDeletionPreservesOtherPhotos() async throws {
+        var first = photo(-1); first.localAssetID = "phone-a"
+        var second = photo(-2, "OTHER.HEIC"); second.localAssetID = "phone-b"
+        let store = LibraryStore(phonePhotos: [first, second])
+        store.remove(ids: [], localAssetIDs: ["phone-a"])
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(store.photos.map(\.id), [-2])
+        XCTAssertEqual(store.sections.flatMap(\.items).map(\.id), [-2])
+    }
+
+    func testUnifiedLibraryMergesOneLocalCopyAndKeepsNASIdentity() {
+        var local = photo(UnifiedLibrary.localID("phone-a"), "IMG.HEIC")
+        local.localAssetID = "phone-a"; local.localVersion = 100
+        let merged = UnifiedLibrary.merge(remote: [photo(42)], local: [local])
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.id, 42)
+        XCTAssertEqual(merged.first?.localAssetID, "phone-a")
+        XCTAssertFalse(merged.first!.isLocalOnly)
+    }
+    func testUnifiedLibraryPreservesAmbiguousAndDifferentMedia() {
+        var local = photo(-1); local.localAssetID = "phone-a"
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1), photo(2)], local: [local]).count, 3)
+        var other = local; other = RemotePhoto(id: -2, filename: other.filename, time: other.time, type: other.type, localAssetID: "phone-b")
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1)], local: [local, other]).count, 3)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, type: "video")], local: [local]).count, 2)
+        var sharedAlbum = photo(1); sharedAlbum.passphrase = "shared-token"
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [sharedAlbum], local: [local]).count, 2)
+    }
+    func testUnifiedLibraryRestoresPhoneOnlyItemAfterNASDeletion() {
+        var local = photo(-1); local.localAssetID = "phone-a"
+        let merged = UnifiedLibrary.merge(remote: [], local: [local])
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertTrue(merged[0].isLocalOnly)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1)], local: []).first?.localAssetID, nil)
+        XCTAssertLessThan(UnifiedLibrary.localID("phone-a"), 0)
+        XCTAssertEqual(UnifiedLibrary.localID("phone-a"), UnifiedLibrary.localID("phone-a"))
+        XCTAssertNotEqual(UnifiedLibrary.localID("phone-a"), UnifiedLibrary.localID("phone-b"))
+    }
+    func testUnifiedLibrarySortsAndDoesNotMergeUnknownDates() {
+        var local = photo(-1, time: nil); local.localAssetID = "phone-a"
+        let merged = UnifiedLibrary.merge(remote: [photo(2, time: 20), photo(1, time: 10)], local: [local])
+        XCTAssertEqual(merged.map(\.id), [2, 1, -1])
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, time: nil)], local: [local]).count, 2)
+    }
+
+    func testUnifiedLibraryMatchesNASLivePhotoToPhoneStill() {
+        // Regression from IMG_3288: the phone no longer advertises Live Photo motion.
+        var local = photo(-1, "IMG_3288.heic", time: 1792165272.385, type: "photo")
+        local.localAssetID = "phone-still"; local.localCaptureTime = 1792183272.385
+        let remote = photo(86, "IMG_3288.heic", time: 1792165272, type: "live")
+        let result = UnifiedLibrary.merge(remote: [remote], local: [local])
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.first?.id, 86)
+        XCTAssertEqual(result.first?.localAssetID, "phone-still")
+        XCTAssertTrue(result.first?.isLive == true)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(86, "IMG_3288.mov", time: 1792165272, type: "video")], local: [local]).count, 2)
+    }
+
+    func testUnifiedLibraryHandlesUTCAndCaptureTimeZoneDifferences() {
+        var local = photo(-1, time: 1_700_000_000 - 6 * 3600)
+        local.localAssetID = "phone"; local.localCaptureTime = 1_700_000_000
+        // NAS imports may use UTC or the camera's original time zone rather than the phone's current zone.
+        for offset in [Double(0), 3600, 19800, -25200] {
+            let result = UnifiedLibrary.merge(remote: [photo(1, time: 1_700_000_000 + offset + 0.6)], local: [local])
+            XCTAssertEqual(result.count, 1)
+            XCTAssertEqual(result[0].localAssetID, "phone")
+        }
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, time: 1_700_000_000 + 86400)], local: [local]).count, 2)
+    }
+    func testUnifiedLibraryHandlesLiveStillAndResourceNames() {
+        var local = photo(-1, "IMG_1234.HEIC", type: "live"); local.localAssetID = "phone"
+        local.localResourceNames = ["IMG_1234.HEIC", "FullSizeRender.JPG"]
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, "IMG_1234.JPG")], local: [local]).count, 1)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, "FullSizeRender.JPG")], local: [local]).count, 1)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, "IMG_1234.MOV", type: "video")], local: [local]).count, 2)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, "IMG_1234-edited-123.JPG")], local: [local]).count, 2)
+    }
+    func testUnifiedLibraryPrefersExactTimeAndKeepsAmbiguity() {
+        var first = photo(-1, time: 1_700_000_000); first.localAssetID = "first"
+        var other = photo(-2, time: 1_700_000_000 + 3600); other.localAssetID = "other"
+        let result = UnifiedLibrary.merge(remote: [photo(1, time: 1_700_000_000 + 0.9)], local: [first, other])
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.first(where: { $0.id == 1 })?.localAssetID, "first")
+        let ambiguous = UnifiedLibrary.merge(remote: [photo(1, time: 1_700_000_000 + 7200)], local: [first, other])
+        XCTAssertEqual(ambiguous.count, 3)
+    }
+    func testUnifiedLibraryUsesUploadIdentityForRenamedPhotos() {
+        var local = photo(-1, "original.heic", time: nil); local.localAssetID = "phone"; local.localVersion = 100
+        let link = UploadPhotoLink(remoteID: 42, localID: "phone", shared: false, created: Date(timeIntervalSince1970: 101))
+        let remote = photo(42, "renamed.heic", time: nil)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [remote], local: [local], links: [link]).count, 1)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [remote], local: [local], links: [link], shared: true).count, 2)
+        local.localVersion = 110
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [remote], local: [local], links: [link]).count, 2)
+    }
+    func testUnifiedLibraryDoesNotGuessConflictingUploadIdentities() {
+        var first = photo(-1, "a.heic", time: nil); first.localAssetID = "a"
+        var other = photo(-2, "b.heic", time: nil); other.localAssetID = "b"
+        let links = ["a", "b"].map { UploadPhotoLink(remoteID: 1, localID: $0, shared: false, created: Date()) }
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [photo(1, "renamed.heic", time: nil)], local: [first, other], links: links).count, 3)
+    }
+    func testUploadIdentityRequiresFinishedTransferAndSurvivesEncoding() throws {
+        var record = TransferRecord(id: UUID(), filename: "IMG.HEIC", folder: "/", shared: false, state: .uploaded, remoteID: 42, created: Date(), sourceID: "false|0|asset/L0/001|1|0")
+        XCTAssertNil(UploadPhotoLink(record: record))
+        record.state = .verified
+        let link = try XCTUnwrap(UploadPhotoLink(record: record))
+        let decoded = try JSONDecoder().decode(UploadPhotoLink.self, from: JSONEncoder().encode(link))
+        XCTAssertEqual(decoded.localID, "asset/L0/001")
+        XCTAssertEqual(decoded.remoteID, 42)
+        XCTAssertFalse(decoded.shared)
+    }
+    func testUnifiedLargeLibraryMatchingKeepsAllUniqueItems() {
+        let remote = (1...10_000).map { photo($0, "IMG_\($0).HEIC", time: Double($0 * 10)) }
+        let local = remote.map { item -> RemotePhoto in
+            var result = photo(-item.id, item.filename, time: (item.time ?? 0) + 0.8)
+            result.localAssetID = "phone-\(item.id)"; return result
+        }
+        let merged = UnifiedLibrary.merge(remote: remote, local: local)
+        XCTAssertEqual(merged.count, 10_000)
+        XCTAssertTrue(merged.allSatisfy { $0.id > 0 && $0.localAssetID != nil })
+    }
+
     func testPhoneDeletionRequiresContentMatchAndValidSourceIdentity() {
         XCTAssertEqual(PhoneDeletionMatch.sourceAssetID("false|12|ABC/L0/001|1|0"), "ABC/L0/001")
         XCTAssertEqual(PhoneDeletionMatch.sourceAssetID("true|12|ABC/L0/001|5|1|e123"), "ABC/L0/001")

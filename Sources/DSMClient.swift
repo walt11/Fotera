@@ -657,6 +657,7 @@ actor DSMClient {
     }
     /// Downloads the original into a private temporary file. Callers own and remove the file.
     func original(_ photo: RemotePhoto, shared: Bool, albumID: Int? = nil, useOfflineCache: Bool = false) async throws -> URL {
+        guard !photo.isLocalOnly, photo.id >= 0 else { throw MediaFailure.unsupportedPhoto }
         if useOfflineCache, let cached = try await OfflineVault.shared.copyOriginal(account: address + "|" + username, photo: photo, shared: shared) { return cached }
         let api = space(shared, "Download")
         return try await authorized { sid in
@@ -942,7 +943,7 @@ struct Credentials: Codable {
 enum Keychain {
     static func query(_ service: String, slot: String = "active") -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "PhotoHarbor") + service,
+         kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "net.jwalter.PhotoHarbor") + service,
          kSecAttrAccount as String: slot]
     }
     static func save(_ data: Data, service: String, background: Bool, slot: String = "active") throws {

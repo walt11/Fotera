@@ -69,3 +69,37 @@ See `IMPLEMENTATION.md` for architecture, fixed bugs and remaining work.
 ### HEIC previews
 
 Fotera creates local previews when NAS thumbnails are missing. For imported HEIC photos that still show placeholders, open **Settings → Storage → Generate HEIC previews**, then tap **Generate previews**. Keep that screen open; Stop or leaving the screen cancels further work while preserving completed previews. This can download many originals, so use Wi-Fi for a large library. HEIC files over 50 MB are skipped. Generated previews appear only in Fotera and are subject to its 300 MB preview-cache limit; this does not generate Synology Photos server previews or alter the originals.
+
+
+### Command-line TestFlight export
+
+Archive with the Fotera scheme, then run:
+
+```sh
+python3 Scripts/export-testflight.py /path/to/Fotera.xcarchive /path/to/export
+```
+
+On this Mac, Xcode 27.2 can replace the signed-in account's username reference
+with a Keychain identifier that `xcodebuild` cannot read (`missing Xcode-Username`),
+then clear the account index. For that specific issue, add `--apple-id YOUR_APPLE_ID`.
+This reuses existing sign-in credentials and restores the username reference after
+export. It refuses multiple accounts or conflicting named references, never reads passwords or
+tokens, and does not upload the IPA. Signing must run with normal user Keychain access.
+The distribution archive and export settings preserve existing bundle identifiers.
+If the token itself is unavailable (`missing Xcode-Token`), the username workaround
+cannot repair it. Use an App Store Connect API key instead:
+
+```sh
+python3 Scripts/export-testflight.py /path/to/Fotera.xcarchive /path/to/export \
+  --key-path /private/path/AuthKey_KEYID.p8 --key-id KEYID --issuer-id ISSUER_UUID
+```
+
+Keep the private key outside the repository. The script passes its path directly to
+Apple's exporter; it does not read or log the key contents.
+
+Personal Space includes authorized iPhone photos alongside NAS photos. Saved upload identities and unique resource-name/capture-time matches combine
+copies for display, allowing NAS time-zone differences, timestamp rounding, and
+Live Photo still representations. Ambiguous matches remain separate. This is not evidence for deletion—phone deletion still checks
+file contents. Shared Space remains a NAS-only collection. Limited Photos access
+shows only the items granted by the user. Cloud originals load on demand; iCloud
+Photos may supply an original when it has been optimized off the phone.

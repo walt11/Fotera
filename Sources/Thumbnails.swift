@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 import ImageIO
 
@@ -59,6 +60,25 @@ extension Notification.Name {
     }
     func cached(_ source: ThumbnailSource, shared: Bool, size: ThumbnailSize) -> UIImage? {
         memory.object(forKey: key(source, shared, size) as NSString)
+    }
+    private func localKey(_ photo: RemotePhoto, _ size: ThumbnailSize) -> String? {
+        photo.localAssetID.map { "local|\($0)|\(photo.localVersion ?? 0)|\(size.rawValue)" }
+    }
+    /// A phone copy's tile image already in memory.
+    func cachedLocal(_ photo: RemotePhoto?, size: ThumbnailSize) -> UIImage? {
+        guard let photo, let key = localKey(photo, size) else { return nil }
+        return memory.object(forKey: key as NSString)
+    }
+    /// Loads a phone copy at tile size (not iCloud) and keeps it with the NAS previews in memory,
+    /// so scrolling back doesn't ask Photos again.
+    func localImage(_ photo: RemotePhoto, size: ThumbnailSize) async -> UIImage? {
+        guard let identifier = photo.localAssetID, let key = localKey(photo, size) else { return nil }
+        if let hit = memory.object(forKey: key as NSString) { return hit }
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { return nil }
+        let pixels: CGFloat = size == .xl ? 2400 : (size == .sm ? 256 : 480)
+        guard let image = await LocalCopy.image(asset, maxPixels: pixels) else { return nil }
+        memory.setObject(image, forKey: key as NSString, cost: Int(image.size.width * image.size.height * image.scale * image.scale * 4))
+        return image
     }
     /// The sharpest preview already in memory, so the viewer can show something immediately.
     func bestCached(_ source: ThumbnailSource, shared: Bool) -> UIImage? {
@@ -132,6 +152,8 @@ extension Notification.Name {
     /// Some NAS items have no generated previews yet. Build a small local preview from the still original.
     /// Avoid unexpectedly downloading full videos or large RAW files while scrolling.
     func originalPreview(_ photo: RemotePhoto, shared: Bool, size: ThumbnailSize, regenerate: Bool = false) async -> UIImage? {
+        if let local = await LocalCopy.asset(photo), let image = await LocalCopy.image(local, maxPixels: size == .xl ? 2400 : 480) { return image }
+        guard !photo.isLocalOnly else { return nil }
         // RAW originals are large and slow to decode; leave those as placeholders until the NAS makes a preview.
         let raw: Set<String> = ["dng", "arw", "cr2", "cr3", "nef", "orf", "raf", "rw2", "srw", "pef"]
         guard !photo.isVideo, !raw.contains((photo.filename as NSString).pathExtension.lowercased()),
@@ -251,14 +273,16 @@ struct ThumbnailView: View {
         let size: String
         let active: Bool
         let photoID: Int?
+        let localVersion: Double?
         let revision: Int
-        var content: [AnyHashable] { [source, shared, size, photoID, revision] }
+        var content: [AnyHashable] { [source, shared, size, photoID, localVersion, revision] }
     }
     @State private var shownFor: [AnyHashable]?
     var body: some View {
         Color(.secondarySystemFill)
             .overlay {
-                if let shown = image ?? source.flatMap({ ImagePipeline.shared.cached($0, shared: shared, size: size) }) {
+                if let shown = image ?? source.flatMap({ ImagePipeline.shared.cached($0, shared: shared, size: size) })
+                    ?? ImagePipeline.shared.cachedLocal(fallbackPhoto, size: size) {
                     Image(uiImage: shown).resizable().aspectRatio(contentMode: contentMode)
                         .transition(animatesLoading ? .opacity : .identity)
                 }
@@ -269,18 +293,20 @@ struct ThumbnailView: View {
                 guard (photo != nil && photo == fallbackPhoto?.id) || (unit != nil && unit == source?.id) else { return }
                 revision += 1
             }
-            .task(id: RequestID(source: source, shared: shared, size: size.rawValue, active: scenePhase == .active, photoID: fallbackPhoto?.id, revision: revision)) {
+            .task(id: RequestID(source: source, shared: shared, size: size.rawValue, active: scenePhase == .active, photoID: fallbackPhoto?.id, localVersion: fallbackPhoto?.localVersion, revision: revision)) {
                 // Keep the current image across scene changes so the app-switcher snapshot isn't blank.
-                let request = RequestID(source: source, shared: shared, size: size.rawValue, active: true, photoID: fallbackPhoto?.id, revision: revision)
+                let request = RequestID(source: source, shared: shared, size: size.rawValue, active: true, photoID: fallbackPhoto?.id, localVersion: fallbackPhoto?.localVersion, revision: revision)
                 if shownFor != request.content { image = nil; shownFor = request.content }
                 guard scenePhase == .active, image == nil else { return }
-                if let source, let cached = ImagePipeline.shared.cached(source, shared: shared, size: size) { image = cached; return }
+                if let cached = source.flatMap({ ImagePipeline.shared.cached($0, shared: shared, size: size) })
+                    ?? ImagePipeline.shared.cachedLocal(fallbackPhoto, size: size) { image = cached; return }
                 // A transient failure or a preview still being generated must not leave a visible tile blank forever.
                 for delay in [0, 2, 5, 15, 30, 60] {
                     do { if delay > 0 { try await Task.sleep(for: .seconds(delay)) }; try Task.checkCancellation() }
                     catch { return }
                     var loaded: UIImage?
-                    if let source { loaded = await ImagePipeline.shared.image(source, shared: shared, size: size) }
+                    if let fallbackPhoto, fallbackPhoto.localAssetID != nil { loaded = await ImagePipeline.shared.localImage(fallbackPhoto, size: size) }
+                    if loaded == nil, let source { loaded = await ImagePipeline.shared.image(source, shared: shared, size: size) }
                     guard !Task.isCancelled else { return }
                     if loaded == nil, let fallbackPhoto {
                         loaded = await ImagePipeline.shared.originalPreview(fallbackPhoto, shared: shared, size: size)

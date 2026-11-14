@@ -69,7 +69,7 @@ struct OfflineAlbumsView: View {
         .task { await load() }.refreshable { await load() }
         .sheet(isPresented: $selecting) {
             PhotoSelectionSheet(title: "Download album", confirmTitle: "Download", asksForName: true) { ids, name in
-                let album = OfflineVault.Album(title: name ?? "Offline album", photos: app.library.photos.filter { ids.contains($0.id) }, shared: app.shared)
+                let album = OfflineVault.Album(title: name ?? "Offline album", photos: app.library.photos.filter { ids.contains($0.id) && !$0.isLocalOnly }, shared: app.shared)
                 try await OfflineVault.shared.save(album, account: app.account); await load()
             }
         }
