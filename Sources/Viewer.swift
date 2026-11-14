@@ -80,6 +80,8 @@ struct MediaViewer: View {
         let range = max(0, state.index - 2)...min(items.count - 1, state.index + 2)
         let sources = range.filter { $0 != state.index }.compactMap { items[$0].thumbnailSource }
         ImagePipeline.shared.prefetch(sources, shared: shared, size: .xl)
+        let nearby = range.filter { $0 != state.index }.map { items[$0] }
+        Task.detached(priority: .utility) { for item in nearby { _ = await LocalAssets.shared.identifier(for: item) } }
     }
     private func loadFavorite() {
         guard let current, state.favorites[current.id] == nil, let client = app.client else { return }
@@ -277,6 +279,87 @@ struct PagerView<Page: View>: UIViewControllerRepresentable {
 }
 
 /// One page: a fast preview first, then the original only when zoomed in or played.
+// MARK: - Copies already on this iPhone
+
+/// Finds the iPhone's own copy of a NAS item, like Immich does, so the viewer can show it without a
+/// download. A match needs the same media type, the same filename and the same capture time (the NAS
+/// stores wall-clock time, so it may differ from the phone's by a whole time-zone offset).
+/// Only used when Photos access was already granted; Fotera never asks for it here.
+actor LocalAssets {
+    static let shared = LocalAssets()
+    private var matches: [String: String?] = [:]
+    nonisolated static var allowed: Bool {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        return status == .authorized || status == .limited
+    }
+    func identifier(for item: RemotePhoto) -> String? {
+        guard Self.allowed, item.passphrase == nil, let time = item.time else { return nil }
+        let key = "\(item.id)|\(item.additional?.thumbnail?.cache_key ?? "")"
+        if let known = matches[key] { return known }
+        let found = Self.find(item, time: time)
+        matches[key] = .some(found)
+        return found
+    }
+    func clear() { matches = [:] }
+    private static func find(_ item: RemotePhoto, time: Double) -> String? {
+        let wall = Date(timeIntervalSince1970: time)
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate <= %@",
+                                        wall.addingTimeInterval(-14 * 3600 - 2) as NSDate, wall.addingTimeInterval(14 * 3600 + 2) as NSDate)
+        let assets = PHAsset.fetchAssets(with: item.isVideo ? .video : .image, options: options)
+        let name = item.filename.lowercased(), stem = (name as NSString).deletingPathExtension
+        var result: String?
+        assets.enumerateObjects { asset, _, stop in
+            guard let created = asset.creationDate else { return }
+            // Time zones are whole quarter hours apart; allow 2 seconds for rounding.
+            let remainder = abs((time - created.timeIntervalSince1970).truncatingRemainder(dividingBy: 900))
+            guard remainder < 2 || remainder > 898 else { return }
+            if item.isLive && !asset.mediaSubtypes.contains(.photoLive) { return }
+            let names = PHAssetResource.assetResources(for: asset).map { $0.originalFilename.lowercased() }
+            if names.contains(where: { $0 == name || ($0 as NSString).deletingPathExtension == stem }) {
+                result = asset.localIdentifier; stop.pointee = true
+            }
+        }
+        return result
+    }
+}
+/// Loads a local copy without touching iCloud; anything not fully on the phone falls back to the NAS.
+@MainActor enum LocalCopy {
+    static func asset(_ item: RemotePhoto) async -> PHAsset? {
+        guard let id = await LocalAssets.shared.identifier(for: item) else { return nil }
+        return PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
+    }
+    static func image(_ asset: PHAsset, maxPixels: CGFloat) async -> UIImage? {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat; options.resizeMode = .fast; options.isNetworkAccessAllowed = false
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: maxPixels, height: maxPixels), contentMode: .aspectFit, options: options) { image, info in
+                guard !resumed, (info?[PHImageResultIsDegradedKey] as? Bool) != true else { return }
+                resumed = true; continuation.resume(returning: image)
+            }
+        }
+    }
+    static func livePhoto(_ asset: PHAsset) async -> PHLivePhoto? {
+        let options = PHLivePhotoRequestOptions()
+        options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = false
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            PHImageManager.default().requestLivePhoto(for: asset, targetSize: CGSize(width: 2400, height: 2400), contentMode: .aspectFit, options: options) { photo, info in
+                guard !resumed, (info?[PHImageResultIsDegradedKey] as? Bool) != true else { return }
+                resumed = true; continuation.resume(returning: photo)
+            }
+        }
+    }
+    static func video(_ asset: PHAsset) async -> AVAsset? {
+        let options = PHVideoRequestOptions()
+        options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = false; options.version = .current
+        return await withCheckedContinuation { continuation in
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { video, _, _ in continuation.resume(returning: video) }
+        }
+    }
+}
+
 struct MediaPage: View {
     let item: RemotePhoto
     let client: DSMClient
@@ -329,10 +412,12 @@ struct MediaPage: View {
         }
         .task {
             // Show the grid thumbnail already in memory right away, then upgrade to the sharp preview.
-            if let source = item.thumbnailSource {
-                if preview == nil { preview = ImagePipeline.shared.bestCached(source, shared: shared) }
-                if let sharp = await ImagePipeline.shared.image(source, shared: shared, size: .xl) { preview = sharp }
+            if let source = item.thumbnailSource, preview == nil { preview = ImagePipeline.shared.bestCached(source, shared: shared) }
+            // The copy on this iPhone, when there is one, needs no download at all.
+            if !item.isVideo, let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 2400) {
+                preview = image; return
             }
+            if let source = item.thumbnailSource, let sharp = await ImagePipeline.shared.image(source, shared: shared, size: .xl) { preview = sharp }
             if preview == nil && !item.isVideo { loadOriginal() }
         }
         .task(id: state.currentID) {
@@ -370,6 +455,7 @@ struct MediaPage: View {
         Task {
             defer { loadingFull = false }
             do {
+                if let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 6000) { full = image; return }
                 let file = try await client.original(item, shared: shared, albumID: albumID, useOfflineCache: true)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let image = await ImagePipeline.decode(file: file, maxPixels: 6000) else { throw MediaFailure.unsupportedPhoto }
@@ -387,9 +473,11 @@ struct MediaPage: View {
         working = true
         defer { working = false }
         do {
-            var asset: AVURLAsset?
+            var asset: AVAsset?
+            // The copy on this iPhone plays immediately.
+            if let local = await LocalCopy.asset(item) { asset = await LocalCopy.video(local) }
             // Settings → Video quality decides between the NAS's smaller stream and the original.
-            if VideoQuality.current.prefersStream, let url = try? await client.streamingURL(id: item.id, shared: shared) {
+            if asset == nil, VideoQuality.current.prefersStream, let url = try? await client.streamingURL(id: item.id, shared: shared) {
                 let candidate = AVURLAsset(url: url)
                 if (try? await withTimeout(8) { try await candidate.load(.isPlayable) }) == true { asset = candidate }
             }
@@ -428,6 +516,10 @@ struct MediaPage: View {
     private func playLive() async {
         guard item.isLive, live == nil else { return }
         if let ready = LivePhotoCache.shared.cached(item, client: client, shared: shared) { live = ready; return }
+        if let local = await LocalCopy.asset(item), let photo = await LocalCopy.livePhoto(local) {
+            guard !Task.isCancelled else { return }
+            live = photo; return
+        }
         working = true
         defer { working = false }
         do {

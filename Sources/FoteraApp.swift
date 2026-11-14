@@ -134,6 +134,7 @@ import WidgetKit
     func switchAccount(to target: AccountRef) async {
         let current = AccountRef(address: address, username: username)
         guard target != current else { return }
+        Task { await LocalAssets.shared.clear() }
         await deactivate()
         AccountVault.park(current)
         guard AccountVault.unpark(target) else {
@@ -148,7 +149,7 @@ import WidgetKit
     /// Stops using the current client without signing it out on the NAS.
     private func deactivate() async {
         routeMonitorTask?.cancel(); routeMonitorTask = nil; activeConnection = ""
-        LivePhotoCache.shared.clear()
+        LivePhotoCache.shared.clear(); Task { await LocalAssets.shared.clear() }
         pendingLogin = nil
         BackupController.shared.detach()
         TransferQueue.flushAll()

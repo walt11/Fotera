@@ -103,6 +103,22 @@ import ImageIO
                 let base = await client.base
                 guard let sid = await client.currentSessionID() else { throw ConnectionError.signedOut }
                 record("route: \(base.absoluteString)")
+                if ProcessInfo.processInfo.arguments.contains("--local-probe") {
+                    record("photos access: \(LocalAssets.allowed)")
+                    var found = 0; let t = Date()
+                    for item in page.prefix(60) { if await LocalAssets.shared.identifier(for: item) != nil { found += 1 } }
+                    record("local copies: \(found) of \(min(60, page.count)) in \(ms(t))")
+                    if let item = page.first(where: { $0.isLive }), let local = await LocalCopy.asset(item) {
+                        let t2 = Date(); let photo = await LocalCopy.livePhoto(local); record("local live \(item.filename): \(photo != nil) in \(ms(t2))")
+                    }
+                    if let item = page.first(where: { $0.isVideo }), let local = await LocalCopy.asset(item) {
+                        let t2 = Date(); let video = await LocalCopy.video(local); record("local video \(item.filename): \(video != nil) in \(ms(t2))")
+                    }
+                    if let item = page.first(where: { $0.type == "photo" }), let local = await LocalCopy.asset(item) {
+                        let t2 = Date(); let image = await LocalCopy.image(local, maxPixels: 2400); record("local photo \(item.filename): \(image != nil) in \(ms(t2))")
+                    }
+                    record("FINISHED"); return
+                }
                 if let photo = page.first(where: { $0.type == "photo" && $0.thumbnailSource != nil }), let source = photo.thumbnailSource {
                     for size in [ThumbnailSize.sm, .m, .xl] {
                         let t = Date(); let data = try await client.thumbnail(source, shared: false, size: size)
