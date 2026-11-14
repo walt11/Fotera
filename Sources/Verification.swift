@@ -242,6 +242,16 @@ import Photos
                 record("FINISHED"); return
             }
             if ProcessInfo.processInfo.arguments.contains("--recycle-probe") {
+                record("personal recycle on: \(String(describing: try? await client.recycleBinEnabled(shared: false))), shared: \(String(describing: try? await client.recycleBinEnabled(shared: true)))")
+                func walk(_ path: String, depth: Int) async {
+                    do {
+                        let files = try await client.recycleFiles(path: path)
+                        record(String(repeating: "  ", count: depth) + "\(path): \(files.filter(\.isdir).count) folders, \(files.filter { !$0.isdir }.count) files" + (files.filter { !$0.isdir }.prefix(3).map(\.name).joined(separator: ", ").isEmpty ? "" : " e.g. " + files.filter { !$0.isdir }.prefix(3).map(\.name).joined(separator: ", ")))
+                        if depth < 4 { for folder in files.filter(\.isdir).prefix(6) { await walk(folder.path, depth: depth + 1) } }
+                    } catch { record(String(repeating: "  ", count: depth) + "\(path): ERROR \(error.localizedDescription)") }
+                }
+                await walk("/home/#recycle", depth: 0)
+                await walk("/photo/#recycle", depth: 0)
                 record("ADMIN: " + String((try await client.featureContract("SYNO.Foto.Setting.Admin", method: "get")).prefix(1500)))
                 record("FINISHED"); return
             }

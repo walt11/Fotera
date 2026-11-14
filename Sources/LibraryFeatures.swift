@@ -356,27 +356,70 @@ struct HiddenPeopleView: View {
     }
     private func load() async { guard let client = app.client else { return }; do { let all = try await client.allPeople(shared: app.shared, includeHidden: true); let visible = Set(try await client.allPeople(shared: app.shared).map(\.id)); people = all.filter { !visible.contains($0.id) } } catch { failure = error.localizedDescription } }
 }
+/// Files Synology moved to the NAS recycle bin, listed together (the bin keeps the year/month folders,
+/// which made deleted photos hard to find). Restore puts a file back where it was.
 struct RecycleBinView: View {
     let path: String
     @EnvironmentObject private var app: AppModel
     @State private var files: [RecycleFile] = []; @State private var failure: String?; @State private var loading = false; @State private var restoring: RecycleFile?
+    @State private var recycleOn: Bool?
     var body: some View {
         List {
-            Text("Restore returns a file to its original folder without overwriting an existing file. The original folder must still exist.").font(.footnote).foregroundStyle(.secondary)
-            ForEach(files) { file in
-                if file.isdir { NavigationLink { RecycleBinView(path: file.path) } label: { Label(file.name, systemImage: "folder") } }
-                else { HStack { Label(file.name, systemImage: "photo"); Spacer(); Button("Restore") { restoring = file } } }
+            if recycleOn == false {
+                Section { Text("The recycle bin is off for this space, so deletions are permanent. Turn it on in Synology Photos → Settings.").foregroundStyle(.orange) }
             }
-            if files.isEmpty && !loading && failure == nil { Text("No deleted files here") }
-            if let failure { Text(failure).foregroundStyle(.secondary) }
-        }.navigationTitle("Recently Deleted").disabled(loading).overlay { if loading { ProgressView() } }
+            Section {
+                ForEach(files) { file in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.name)
+                            Text(folder(of: file)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Restore") { restoring = file }.buttonStyle(.bordered)
+                    }
+                }
+                if files.isEmpty && !loading && failure == nil { Text("Nothing deleted recently").foregroundStyle(.secondary) }
+                if let failure { Text(failure).foregroundStyle(.secondary) }
+            } footer: {
+                Text("Restore returns a file to its original folder without overwriting anything. Synology Photos shows it again after it re-indexes.")
+            }
+        }
+        .navigationTitle("Recently deleted").disabled(loading).overlay { if loading { ProgressView() } }
         .task { await load() }.refreshable { await load() }
-        .confirmationDialog("Restore this file to its original folder?", isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } })) {
+        .confirmationDialog("Restore this file to its original folder?", isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } }), titleVisibility: .visible) {
             if let file = restoring { Button("Restore \(file.name)") { Task { await restore(file) } } }
         }
     }
-    private func load() async { guard let client = app.client else { return }; loading = true; failure = nil; defer { loading = false }; do { files = try await client.recycleFiles(path: path) } catch ConnectionError.server(408) { failure = "The NAS has no accessible recycle-bin folder here. It may be empty or recycling may be disabled." } catch { failure = error.localizedDescription } }
-    private func restore(_ file: RecycleFile) async { guard let client = app.client else { return }; restoring = nil; loading = true; defer { loading = false }; do { try await client.restoreRecycledFile(file); app.library.refresh(); await load() } catch { failure = "Restore could not be confirmed: " + error.localizedDescription } }
+    private func folder(of file: RecycleFile) -> String {
+        let parent = (file.path as NSString).deletingLastPathComponent
+        return parent.hasPrefix(path) ? String(parent.dropFirst(path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")) : parent
+    }
+    private func load() async {
+        guard let client = app.client else { return }
+        loading = true; failure = nil; defer { loading = false }
+        recycleOn = try? await client.recycleBinEnabled(shared: path.hasPrefix("/photo"))
+        var found: [RecycleFile] = []
+        var folders = [path]
+        do {
+            // Walk the year/month folders; stop at a generous cap so a huge bin stays responsive.
+            while let next = folders.popLast(), found.count < 3000 {
+                let entries = try await client.recycleFiles(path: next)
+                found += entries.filter { !$0.isdir }
+                folders += entries.filter(\.isdir).map(\.path)
+            }
+            files = found.sorted { $0.path.localizedStandardCompare($1.path) == .orderedDescending }
+        } catch ConnectionError.server(408) {
+            files = found
+            if found.isEmpty { failure = recycleOn == false ? nil : "Nothing deleted recently." }
+        } catch { failure = error.localizedDescription }
+    }
+    private func restore(_ file: RecycleFile) async {
+        guard let client = app.client else { return }
+        restoring = nil; loading = true; defer { loading = false }
+        do { try await client.restoreRecycledFile(file); app.library.refresh(); files.removeAll { $0.path == file.path } }
+        catch { failure = "Restore could not be confirmed: " + error.localizedDescription }
+    }
 }
 struct SharedWithMeView: View {
     @EnvironmentObject private var app: AppModel

@@ -29,6 +29,18 @@ struct LibraryTab: View {
                     coverTile("Shared", count: sharedCount, cover: nil) { SharedWithMeView() }
                 }
                 .padding(.horizontal, Theme.gutter).padding(.top, 4)
+                // Tools that used to hide in the ⋯ menu, reachable in one tap.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        utility("Recently deleted", "trash", .trash)
+                        utility("Recently added", "clock", .recent)
+                        utility("Duplicates", "square.on.square", .duplicates)
+                        utility("Folders", "folder", .folders)
+                        utility("Upload to NAS", "square.and.arrow.up", .upload)
+                    }
+                    .padding(.horizontal, Theme.gutter)
+                }
+                .padding(.top, Theme.medium)
                 HStack {
                     Text("Albums").font(.title3.bold())
                     Spacer()
@@ -114,6 +126,14 @@ struct LibraryTab: View {
         defer { loading = false }
         do { albums = try await client.allAlbums() }
         catch { if !isCancelledRequest(error) { failure = error.localizedDescription } }
+    }
+    private func utility(_ title: String, _ icon: String, _ target: Destination) -> some View {
+        Button { destination = target } label: {
+            Label(title, systemImage: icon).font(.subheadline.weight(.medium))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
     /// A photo-cover card like an album. Collections without a cover photo use a plain card.
     private func coverTile<Content: View>(_ title: String, count: Int?, cover: RemotePhoto?, @ViewBuilder destination: @escaping () -> Content) -> some View {
