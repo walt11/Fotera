@@ -593,6 +593,9 @@ struct PhotosTab: View {
                     if !library.memories.isEmpty && selection == nil { memories }
                 }
             }
+            // A different account or space is a different timeline: start it at the top, not at the
+            // old scroll offset, which may be past the end of a shorter library.
+            .id(app.account + (app.shared ? "|shared" : "|personal"))
         }
     }
     private var memories: some View {
