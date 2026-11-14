@@ -145,6 +145,36 @@ enum QuickConnectResolver {
 struct RouteProfile: Codable {
     var lan: String = ""
     var quickConnect: String = ""
+    // Optional so previously saved profiles decode without losing LAN or QuickConnect settings.
+    var remoteURL: String? = nil
     var enabled = false
     var identity = ""
+}
+
+extension RouteProfile {
+    static func remoteAddress(_ value: String) throws -> URL? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let url = try DSMClient.normalize(trimmed)
+        guard url.scheme == "https" else { throw ConnectionError.invalidAddress }
+        return url
+    }
+    func verifiedDirectRoute(current: URL, canonical: String, allowLAN: Bool = true,
+                             probe: @Sendable (URL) async throws -> String) async -> URL? {
+        for candidate in directCandidates(current: current, canonical: canonical, allowLAN: allowLAN) {
+            guard !Task.isCancelled else { return nil }
+            if let found = try? await probe(candidate), !identity.isEmpty, found == identity { return candidate }
+        }
+        return nil
+    }
+    /// Validated origins, in preference order; probe each at most once per selection.
+    func directCandidates(current: URL, canonical: String, allowLAN: Bool = true) -> [URL] {
+        var candidates: [URL] = []
+        if let local = try? DSMClient.normalize(lan), ConnectionAddress.isLAN(local.host ?? "") { candidates.append(local) }
+        if let remote = try? Self.remoteAddress(remoteURL ?? "") { candidates.append(remote) }
+        candidates.append(current)
+        if let original = try? DSMClient.normalize(canonical) { candidates.append(original) }
+        var seen = Set<URL>()
+        return candidates.filter { (allowLAN || !ConnectionAddress.isLAN($0.host ?? "")) && seen.insert($0).inserted }
+    }
 }

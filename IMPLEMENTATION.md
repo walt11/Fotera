@@ -131,3 +131,78 @@ Review fixes before commit: Free up space now requires edited renderings to be v
 Verified: unit tests pass on the simulator; NAS probes on the iPhone confirmed `SimilarItem.list` and `SimilarTimeline.get`. Not verified against the NAS: shared-album token browsing (no albums are shared with this account), `Similar.get` grouping, multiple accounts, the share extension on a device (needs an App ID with App Groups; see below), and the new flows by touch.
 
 Device signing: the share extension needs App ID `net.jwalter.PhotoHarbor.Share` with the `group.net.jwalter.Fotera` App Group. Xcode registers it automatically once an Apple account is added in Xcode → Settings → Accounts and the project is built for a device once.
+
+## Backup stall repair (November 13, evening)
+
+The phone's saved queue contained 245 verified resources, 40 queued resources (28 repeatedly reporting ZIPFoundation missingEndOfCentralDirectoryRecord), and one unsupported AVIF requiring attention. Read-only NAS probes reproduced the failure: some items marked `live` return a single HEIC or video instead of an archive.
+
+- Duplicate checking now validates the downloaded payload as an image, video, or ZIP and hashes its actual contents. Only an exact SHA-256 match skips an upload; invalid packages remain errors, not assumed matches.
+- Pending retry/backoff keeps the owning backup task alive, preserving an existing iOS continued-processing grant instead of ending it and relying on a foreground-only timer.
+- Returning to the foreground cancels and awaits the suspension worker before resuming backup. Starts are reserved before task scheduling to prevent competing starts losing the cancellation handle.
+- Cancellation during submission/verification no longer increases failure attempts or verification backoff.
+
+Regression coverage includes raw-image responses labeled live, real archives containing still and motion resources, and rejection of corrupt payloads. Long-duration locked-device progress still requires a phone trial; iOS remains responsible for scheduling background execution. The new FoteraShare extension needs an App Groups provisioning profile before this source can be installed as a complete device build.
+
+Repair validation: 17 simulator unit tests passed. Read-only checks against all 29 NAS candidates implicated by the phone queue passed the new fingerprint decoder, including standalone HEIC, standalone QuickTime, and genuine two-resource archives. The standalone QuickTime response's SHA-256 also exactly matched a queued phone original. No backup records were marked complete manually and no NAS files were deleted or moved. Full phone installation remains blocked by the FoteraShare signing profile; the unsigned device build also passed, which verifies device compilation but does not permit installation.
+
+Device follow-up: after Apple account sign-in, the command-line builder still reported no account. Building the same Fotera project directly in Xcode successfully provisioned FoteraShare. The signed app passed codesign verification, was installed on the phone, and launched normally. All 29 download probes passed on the physical phone. Twenty of the 28 previously ZIP-blocked records became verified; eight retained prior retry delays at the last snapshot. New backup work was also progressing. Long-duration locked-phone behavior is still a trial item, not a completed endurance test.
+
+## Local HEIC preview generation
+
+Fotera's fallback now resolves missing size metadata and supports HEIC/HEIF/HIF originals up to 50 MB. Settings → Storage → Generate HEIC previews scans the selected Photos space and generates previews sequentially, with progress and cancellation. Leaving the screen or backgrounding cancels the pass; completed previews remain cached. Manual generation bypasses NAS placeholder previews and updates the timeline's small/medium caches plus its high-quality preview. No preview is uploaded to Synology and originals remain unchanged.
+
+A real NAS HEIC exposed UIImage JPEG encoding returning nil for the decoded high-bit-depth image. Rendering into standard-range RGB before JPEG encoding fixed persistent caching. NAS validation passed missing-size metadata handling, both grid cache sizes, and account-scoped disk caching. The simulator regression suite and signed device build passed; Settings navigation was checked in the simulator.
+
+
+### Two-factor login continuation investigation
+
+Reproduced authentication error 402 with a second account in the simulator. Changing the session name to SynologyPhotos did not resolve it; that experiment was reverted. The NAS's own public login bundle handles error 403 by retaining `error.errors.token` and submitting it in `passwd` with the OTP. Fotera previously discarded this response detail and recreated its client for the OTP step. It now preserves that continuation only in memory, scoped to the same client, username and original password, with a five-minute limit. Persisted credentials always retain the original password, never the temporary token. Error payload decoding remains compatible with non-authentication APIs whose `errors` field is an array.
+
+All 20 simulator unit tests passed, including challenge scope/expiry and error decoding. Live second-account verification remains pending; this is not yet a confirmed fix for that account's 402. DEBUG builds write only authentication result codes and challenge-present/used booleans to `Documents/login-verification.txt`, never credentials, tokens or raw responses.
+
+Phone follow-up: the server returned 403 with a challenge, and Fotera used it on the OTP request, but that request still returned 402. Opening the NAS Photos page then revealed its actual login redirect includes `app_name=SYNO.Foto.AppInstance` (alongside launchApp and photos_action). The NAS public login helper merges these URL parameters into its authentication request. Fotera now includes this Photos application identifier; a session name alone was not equivalent. This request change is based on observed vendor behavior; successful affected-account authentication still requires live confirmation.
+
+Fresh web sign-in succeeded for the affected account, while phone diagnostics confirmed 403/challenge followed by 402 even with app_name. The next build aligns the native request with the observed Photos web flow: negotiated Auth v7 (v6 only when v7 is unavailable), webui session, Photos launchApp/app_name/photos_action, local login type, and private ephemeral cookies retained across steps. Device registration parameters remain consistent from the password step, and both v6 did and v7 device_id response fields are accepted. The app still requests SID format and uses explicit SIDs for Photos API calls. Live affected-account success is not yet verified.
+
+### Memory previews and cached-library refresh
+
+Memory covers and story slides now pass their RemotePhoto into ThumbnailView's bounded original-preview fallback, matching timeline behavior for missing NAS/HEIC previews. Widget memory generation uses the same fallback. This does not manufacture previews for unsupported video/RAW originals or bypass download size limits.
+
+Pull-to-refresh no longer forces a full metadata scan. Within the existing six-hour reconciliation interval, it checks total count and the newest 100 items, merging only if those account for the entire count increase and overlap the cached prefix in order. A second count check rejects a changing snapshot. Unchanged libraries avoid rebuilding their derived timeline; imports outside the newest page, deletions, replacements and ambiguous ordering fall back to full reconciliation. Older same-count edits remain discoverable by the periodic full scan. No undocumented Diff endpoint is assumed. Unit tests cover unchanged/new/updated items and fallback conditions.
+
+### Large-library map responsiveness
+
+Photo map clustering now runs in a detached, cancellable task with periodic cancellation checks. Only photos inside the viewport are grouped into an 8x8 grid, capping SwiftUI/MapKit rendering at 64 annotations. Longitude wrapping handles the date line, invalid coordinates are ignored, and stale camera results cannot replace newer work. A fixed initial world map rectangle avoids camera-fitting feedback from changing annotations. Synthetic 100,000-photo tests retained all valid items at world extent; all 27 tests passed. Simulator UI checks verified opening, panning and navigating back with that synthetic library. Actual NAS thumbnails and physical-device performance still depend on the user's library/network.
+
+### Manual memories and timeline navigation
+
+Memory stories no longer have a timer, automatic advancement, pause gesture, or fade between items. Their progress segments indicate the selected item instead of elapsed time. A Show in timeline button returns the current photo ID to PhotosTab; after the memory dismisses, PhotoGrid reveals the containing section, centers the photo and outlines it. Jump requests have unique IDs so repeated navigation to the same photo works. Original-preview loading remains enabled with loading fades disabled for memory slides.
+
+Verified in the simulator using an isolated 100-photo timeline: the memory remained on item 1 after seven seconds, manual Next selected item 2, and Show in timeline centered/highlighted photo 91 (the current memory item) far down the timeline. Synthetic previews intentionally have no images or NAS access.
+
+Timeline jump follow-up: the one-photo-per-section UI test missed nested lazy month grids. Navigation now uses the target row’s proportional section anchor to materialize its tile; the tile task then centers the exact photo and only then marks the request handled. Verified in the simulator with three 1,000-photo sections, targeting photo 1790 deep in the second section. The highlighted tile appeared at viewport center.
+
+### Separate LAN and remote HTTPS routes
+
+Connections settings now persist a full remote HTTPS origin alongside LAN and optional QuickConnect. Legacy profiles decode without losing their settings. Selection prefers verified LAN, then the configured remote HTTPS origin, then remaining current/canonical routes and QuickConnect. Candidates are deduplicated and still require the saved NAS identity before switching. Existing network-change monitoring selects routes even when backup is disabled. Controlled tests cover LAN preference, LAN failure to remote, and rejecting a different NAS. The remote pics.jwalter.net identity probe passed from this Mac; the previous LAN address 192.168.68.66:10004 returned No route to host, so physical LAN/cellular transition remains unverified.
+
+### Live route display and switching
+
+AppModel publishes the active route separately from the saved account address. Settings shows LAN/Remote plus the active URL beneath the username; Connections uses that same live state. DSMClient publishes route changes, filtered to the current client to prevent account cross-talk. A foreground-only 15-second monitor and immediate foreground/network checks refresh route selection without relaunching; it stops on background, sign-out and account changes. Explicit checks arriving during a probe queue a follow-up instead of being lost. Connection failures trigger route reevaluation; only get/list/count/query requests retry once after the origin changes, never writes or login requests. Cancellation and certificate failures do not trigger this retry. All 31 tests passed before the final save-connections follow-up adjustment; signed build validates the final source. Physical LAN/cellular switching remains dependent on reachable configured endpoints and was not exercised from this Mac.
+
+### Faster network handoff
+
+Route checks are shared and awaited before pull-to-refresh starts. Cellular paths exclude LAN candidates; identity probes have a three-second total timeout. Route changes cancel outstanding read requests and retry them once on the verified new origin, while writes are not replayed. Background upload migration no longer delays route selection. Simulator tests cover cellular candidate filtering, origin comparison, and existing route identity protection. Physical Wi-Fi/cellular handoff still requires device validation.
+
+## Review of the route, preview and login changes (November 14)
+
+Fixed after review:
+- Route checks stalled browsing. A 15-second foreground monitor forced full route checks, and every request waited for any check in progress (up to ~3 s per check when an unreachable LAN address timed out). Now only the first request waits; later checks run alongside requests, reads in flight to the old origin are still cancelled and retried on a switch, and the monitor checks on foreground return and then at most once a minute. Pull-to-refresh no longer waits for a route check.
+- Generating HEIC previews reloaded every thumbnail for each generated photo (a global revision counter observed by every tile). Regeneration now posts the photo's ID and only that photo's tiles reload.
+
+Login investigation:
+- Synology's DSM Login Web API Guide documents Auth versions 3–7 (6 recommended), `session` as an optional "login session name for DSM Applications", 402 as "Denied permission", device tokens (`enable_device_token`/`device_name`/`device_id`), and logout with no extra parameters. It does not document returning a 403 token in `passwd`, nor `app_name`/`launchApp`/`photos_action`/`logintype`/`client`.
+- The NAS's own web login (`synocredential.js`) uses Auth v6 with `session=webui`, moving to v7 only together with an encrypted Noise handshake, and maps 402 to "no privilege". The NAS has Synology's Secure SignIn service installed, which adds approve-on-phone and passwordless sign-in; the 403 continuation token is consistent with that.
+- A probe with a nonexistent account reached the password check (error 400) on both v6 and v7 with Fotera's parameters, so the request shape is accepted.
+- The phone's DEBUG login log (result codes only) shows the final code working: a 403 with challenge followed by a successful sign-in that used it, and six further successful sign-ins.
+- Open: whether `session=webui` ties the app's session to DSM's web-UI logout timer is untested; it would show up as more frequent renewals.

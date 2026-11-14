@@ -15,6 +15,58 @@ import ImageIO
             try? results.joined(separator: "\n").write(to: report, atomically: true, encoding: .utf8)
         }
         do {
+            if ProcessInfo.processInfo.arguments.contains("--login-session-tests") {
+                do {
+                    try await client.verifyLoginSession("PhotoHarbor")
+                    record("PASS: existing session-name login accepted")
+                } catch AuthError.permissionDenied {
+                    record("REPRODUCED: existing session-name login denied with 402")
+                    try await client.verifyLoginSession("SynologyPhotos")
+                    record("PASS: Photos session-name login accepted")
+                }
+                _ = try await client.items(.all, shared: false, offset: 0, limit: 1)
+                record("PASS: authenticated photo listing after login")
+                record("FINISHED LOGIN SESSION TESTS"); return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--backup-download-tests") {
+                var photos: [RemotePhoto] = []; var offset = 0
+                while true {
+                    let page = try await client.items(.all, shared: false, offset: offset)
+                    photos += page; offset += page.count
+                    if page.count < DSMClient.pageSize { break }
+                }
+                let targets: [(String, Int64)] = [("IMG_3288.heic", 1146112), ("IMG_2325.heic", 2529967), ("IMG_20260711_164719.heic", 801653), ("IMG_20260613_173856.heic", 2598371), ("IMG_20260613_173819 (2).heic", 2353499), ("IMG_1477.MOV", 3374700), ("IMG_20260613_173819 (1).heic", 2472162), ("IMG_20260613_173819.heic", 2171732), ("IMG_20260613_173732.heic", 2441994), ("IMG_20260613_173730.heic", 2450694), ("IMG_20260606_095526.heic", 2232436), ("IMG_20260606_095526 (1).heic", 5217330), ("IMG_20260606_095526 (2).heic", 1681627), ("IMG_20260606_095526 (3).heic", 2376269), ("IMG_20260606_095526 (4).heic", 1176642), ("IMG_20260606_095527.heic", 1320305), ("IMG_20260606_095527 (1).heic", 949185), ("IMG_20260606_095527 (2).heic", 921771), ("IMG_20260606_095527 (3).heic", 1243754), ("IMG_20260606_095527 (4).heic", 666526), ("IMG_20260606_095527 (5).heic", 2071958), ("IMG_20260606_095527 (6).heic", 911313), ("IMG_20260606_095527 (7).heic", 1744187), ("IMG_20260606_095527 (8).heic", 3272369), ("IMG_20260606_095527 (9).heic", 1670903), ("IMG_20260606_095527 (10).heic", 1829868), ("IMG_20260606_095527 (11).heic", 1305624), ("IMG_20260606_095527 (12).heic", 4150110)]
+                let candidates = photos.filter { photo in photo.isLive && targets.contains { name, size in
+                    photo.filesize == size || (photo.filename as NSString).deletingPathExtension.lowercased() == (name as NSString).deletingPathExtension.lowercased()
+                } }
+                record("Checking \(candidates.count) candidates from the phone's failed duplicate checks")
+                for photo in candidates {
+                    let file = try await client.livePackage(photo, shared: false)
+                    defer { try? FileManager.default.removeItem(at: file) }
+                    let handle = try FileHandle(forReadingFrom: file)
+                    let prefix = try handle.read(upToCount: 16) ?? Data(); try handle.close()
+                    let imageType = CGImageSourceCreateWithURL(file as CFURL, nil).flatMap { CGImageSourceGetType($0) } as String?
+                    record("RESPONSE: \(photo.id), type=\(imageType ?? "unknown"), signature=\(prefix.map { String(format: "%02x", $0) }.joined())")
+                    do {
+                        let hashes = try await TransferQueue.originalDigests(file, live: true)
+                        guard hashes.contains(try TransferQueue.digest(file).0) else { throw TransferError.mismatch }
+                        record("PASS: duplicate fingerprint decoded for NAS item \(photo.id)")
+                    } catch {
+                        let capture = documents.appendingPathComponent("backup-probe-\(photo.id).bin")
+                        try? FileManager.default.removeItem(at: capture)
+                        try FileManager.default.copyItem(at: file, to: capture)
+                        record("FAIL DECODE: \(photo.id), \(error)")
+                    }
+                    do {
+                        let package = try OriginalPackage.unpack(file)
+                        record("PACKAGE: \(photo.id), \(package.files.count) resources")
+                        try? FileManager.default.removeItem(at: package.directory)
+                    } catch {
+                        record("NONPACKAGE: \(photo.id), type=\(imageType ?? "unknown"), signature=\(prefix.map { String(format: "%02x", $0) }.joined()), error=\(error)")
+                    }
+                }
+                record("FINISHED BACKUP DOWNLOAD PROBES"); return
+            }
             if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--repair-session"), ProcessInfo.processInfo.arguments.indices.contains(index + 2),
                let sid = await client.currentSessionID() {
                 // Development repair: rebinds the simulator's current session to a direct address and account.
@@ -189,6 +241,26 @@ import ImageIO
                 guard LocalLibrarySearch.results(page, query: first.filename, media: .all, year: nil).contains(where: { $0.id == first.id }) else { throw ConnectionError.invalidResponse }
                 record("PASS: search finds an actual NAS photo using only its downloaded metadata")
                 record("FINISHED REVIEW TESTS"); return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--heic-preview-tests") {
+                let photos = try await client.items(.all, shared: false, offset: 0, limit: 100)
+                guard var photo = photos.first(where: { ImagePipeline.isHEIC($0) && !$0.isLive }) else { throw ConnectionError.invalidResponse }
+                photo.filesize = nil // Exercise imported items lacking size in list metadata.
+                guard let preview = await ImagePipeline.shared.originalPreview(photo, shared: false, size: .xl, regenerate: true),
+                      max(preview.size.width, preview.size.height) <= 2400 else { throw ConnectionError.invalidResponse }
+                record("PASS: real NAS HEIC original generated a bounded local preview with missing list size metadata")
+                if let source = photo.thumbnailSource {
+                    record("Cached sizes: small=\(ImagePipeline.shared.cached(source, shared: false, size: .sm) != nil), medium=\(ImagePipeline.shared.cached(source, shared: false, size: .m) != nil)")
+                    guard ImagePipeline.shared.cached(source, shared: false, size: .sm) != nil,
+                          ImagePipeline.shared.cached(source, shared: false, size: .m) != nil else { throw ConnectionError.invalidResponse }
+                    record("PASS: generated preview populated both timeline thumbnail sizes")
+                    if let saved = try? SessionStore.load() {
+                        let key = saved.address + "|" + saved.username + "|false|xl|" + source.kind + "|" + String(source.id) + "|" + source.cacheKey
+                        guard let data = await LibraryCache.shared.preview(key: key), await ImagePipeline.decode(data, maxPixels: 480) != nil else { throw ConnectionError.invalidResponse }
+                        record("PASS: generated JPEG preview persisted in account-scoped cache")
+                    }
+                }
+                record("FINISHED HEIC PREVIEW TESTS"); return
             }
             if ProcessInfo.processInfo.arguments.contains("--thumbnail-tests") {
                 let photos = try await client.items(.all, shared: false, offset: 0, limit: 100)

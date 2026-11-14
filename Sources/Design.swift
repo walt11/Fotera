@@ -180,38 +180,32 @@ struct BackupProgressLine: View {
 
 // MARK: - Memory stories
 
-/// Full-screen, auto-advancing memory, like Immich and Ente. Tap the sides to step, hold to pause.
+/// Full-screen memory. Photos change only when the user taps previous or next.
 struct MemoryStoryView: View {
     let memory: Memory
     let shared: Bool
+    var showInTimeline: (Int) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var index = 0
-    @State private var progress: Double = 0
-    @State private var paused = false
     @State private var viewer: ViewerRequest?
-    private let duration: Double = 5
-    private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
     private var items: [RemotePhoto] { memory.items }
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if items.indices.contains(index) {
-                ThumbnailView(source: items[index].thumbnailSource, shared: shared, size: .xl, contentMode: .fit)
+                ThumbnailView(source: items[index].thumbnailSource, shared: shared, size: .xl, contentMode: .fit, fallbackPhoto: items[index], animatesLoading: false)
                     .background(Color.black)
                     .id(items[index].id)
-                    .transition(.opacity)
                     .ignoresSafeArea()
             }
             HStack(spacing: 0) {
                 Color.clear.contentShape(Rectangle()).onTapGesture { step(-1) }
                 Color.clear.contentShape(Rectangle()).onTapGesture { step(1) }
             }
-            .onLongPressGesture(minimumDuration: 0.2, perform: {}, onPressingChanged: { paused = $0 })
             .accessibilityElement()
             .accessibilityLabel("\(memory.title), item \(index + 1) of \(items.count)")
             .accessibilityAction(named: "Next") { step(1) }
             .accessibilityAction(named: "Previous") { step(-1) }
-            .accessibilityAction(named: paused ? "Resume" : "Pause") { paused.toggle() }
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 3) {
                     ForEach(items.indices, id: \.self) { position in
@@ -238,6 +232,17 @@ struct MemoryStoryView: View {
                         .accessibilityLabel("Close")
                 }
                 Spacer()
+                Button {
+                    guard let photo = items[safe: index] else { return }
+                    showInTimeline(photo.id)
+                    dismiss()
+                } label: {
+                    Label("Show in timeline", systemImage: "square.grid.3x3")
+                        .font(.subheadline.weight(.semibold)).padding(.horizontal, 18).padding(.vertical, 12)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .frame(maxWidth: .infinity).padding(.bottom, 24)
+                .disabled(items.isEmpty)
             }
             .foregroundStyle(.white)
             .shadow(color: .black.opacity(0.5), radius: 4)
@@ -245,26 +250,17 @@ struct MemoryStoryView: View {
         }
         .preferredColorScheme(.dark)
         .statusBarHidden()
-        .onReceive(tick) { _ in
-            guard !paused, viewer == nil, !items.isEmpty else { return }
-            progress += 0.05 / duration
-            if progress >= 1 { step(1) }
-        }
         .fullScreenCover(item: $viewer) { request in MediaViewer(items: request.items, startID: request.id, shared: shared) }
     }
-    private func fill(_ position: Int) -> CGFloat {
-        if position < index { return 1 }
-        if position > index { return 0 }
-        return CGFloat(min(1, progress))
-    }
+    private func fill(_ position: Int) -> CGFloat { position <= index ? 1 : 0 }
     private func step(_ delta: Int) {
         let next = index + delta
-        guard next >= 0 else { progress = 0; return }
+        guard next >= 0 else { return }
         guard next < items.count else { dismiss(); return }
-        withAnimation(.easeInOut(duration: 0.25)) { index = next }
-        progress = 0
+        index = next
     }
 }
+
 extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
@@ -305,3 +301,27 @@ struct Filmstrip: View {
         }
     }
 }
+
+#if DEBUG
+struct MemoryNavigationPreview: View {
+    private let photos = (0..<3000).map { RemotePhoto(id: $0, filename: "Photo \($0)", time: Double(1_780_739_985 - $0 * 86400), type: "photo", additional: nil) }
+    @State private var selection: Set<Int>?
+    @State private var memory: Memory?
+    @State private var pending: Int?
+    @State private var jump: TimelineJump?
+    var body: some View {
+        NavigationStack {
+            PhotoGrid(sections: (0..<3).map { month in GridSection(id: "month-\(month)", title: "Month \(month)", items: Array(photos[(month * 1000)..<((month + 1) * 1000)])) }, shared: false,
+                      selection: $selection, timelineJump: jump) {
+                Button("Open test memory") { memory = Memory(id: "test", title: "Test memory", items: Array(photos[1790...1792])) }
+                    .padding()
+            }.navigationTitle("Memory navigation")
+        }
+        .fullScreenCover(item: $memory, onDismiss: {
+            if let pending { jump = TimelineJump(photoID: pending); self.pending = nil }
+        }) { memory in
+            MemoryStoryView(memory: memory, shared: false) { pending = $0 }
+        }
+    }
+}
+#endif

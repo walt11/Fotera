@@ -10,6 +10,7 @@ struct Memory: Identifiable, Sendable {
     let id: String
     let title: String
     let items: [RemotePhoto]
+    var cover: RemotePhoto? { items.first(where: { !$0.isVideo }) ?? items.first }
 }
 enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     case day = "Day", month = "Month"
@@ -66,9 +67,8 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         guard let lastSynced else { refresh(); return }
         if Date().timeIntervalSince(lastSynced) > 300 { refresh() }
     }
-    /// `force` (pull-to-refresh) always re-downloads the index. Otherwise a cheap check of the item count
-    /// and newest items skips the full download when nothing changed. A full sync still runs every 6 hours
-    /// to catch edits the check can't see.
+    /// Ordinary refresh checks the count and newest page, reusing the cached tail when possible.
+    /// Explicit rebuilds and six-hour reconciliation catch older edits, imports and deletions.
     func refresh(force: Bool = false) {
         guard let client, !syncing else { return }
         syncing = true; failure = nil
@@ -84,8 +84,14 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
                     async let newest = client.items(.all, shared: space, offset: 0, limit: 100, withLocation: true)
                     let (total, page) = try await (count, newest)
                     guard key == cacheAccount, generation == syncGeneration else { return }
-                    if total == known.count, page == Array(known.prefix(page.count)) {
+                    if let merged = Self.mergeRecent(known: known, page: page, total: total),
+                       try await client.count(shared: space) == total {
+                        try Task.checkCancellation()
+                        guard key == cacheAccount, generation == syncGeneration else { return }
+                        let changed = merged != photos
+                        if changed { apply(merged) }
                         lastSynced = Date()
+                        if changed { try? await LibraryCache.shared.write(account: key, snapshot: .init(photos: merged, updated: Date())) }
                         await refreshFavorites(client: client, space: space, generation: generation)
                         return
                     }
@@ -119,6 +125,19 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         }
         _ = syncTask
     }
+    /// Merge only when the newest page accounts for every added item and overlaps the
+    /// cached prefix in order. Older imports, deletions and replacements require reconciliation.
+    nonisolated static func mergeRecent(known: [RemotePhoto], page: [RemotePhoto], total: Int) -> [RemotePhoto]? {
+        guard !known.isEmpty, !page.isEmpty, total >= known.count else { return nil }
+        let knownIDs = Set(known.map(\.id)), pageIDs = Set(page.map(\.id))
+        guard knownIDs.count == known.count, pageIDs.count == page.count else { return nil }
+        let overlap = page.filter { knownIDs.contains($0.id) }.map(\.id)
+        guard !overlap.isEmpty, overlap == Array(known.prefix(overlap.count)).map(\.id),
+              pageIDs.subtracting(knownIDs).count == total - known.count else { return nil }
+        let result = page + known.filter { !pageIDs.contains($0.id) }
+        return result.count == total ? result : nil
+    }
+
     /// The list API doesn't report favorites, so fetch the (usually short) favorites list for tile hearts.
     private func refreshFavorites(client: DSMClient, space: Bool, generation: UUID) async {
         var favorites = Set<Int>(); var offset = 0
@@ -129,7 +148,8 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         if generation == syncGeneration { FavoriteMarks.shared.replace(favorites) }
     }
     func refreshAndWait() async {
-        refresh(force: true)
+        // Don't hold the refresh for a route check: a failed read re-checks the route and retries.
+        refresh()
         await syncTask?.value
     }
     /// Removes items locally after a confirmed server deletion so the grid updates immediately.
@@ -246,7 +266,10 @@ enum WidgetMemories {
         }
         var entries: [WidgetSnapshot] = []
         for (title, photo) in picks.prefix(6) {
-            guard let source = photo.thumbnailSource, let image = await ImagePipeline.shared.image(source, shared: shared, size: .xl) else { continue }
+            var preview: UIImage?
+            if let source = photo.thumbnailSource { preview = await ImagePipeline.shared.image(source, shared: shared, size: .xl) }
+            if preview == nil { preview = await ImagePipeline.shared.originalPreview(photo, shared: shared, size: .xl) }
+            guard let image = preview else { continue }
             let scale = min(1, 800 / max(image.size.width, image.size.height))
             let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
             let data = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.8) { _ in image.draw(in: CGRect(origin: .zero, size: size)) }

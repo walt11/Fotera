@@ -204,23 +204,52 @@ struct SmartAlbumResults: View {
 }
 struct ConnectionSettingsView: View {
     @EnvironmentObject private var app: AppModel
-    @State private var lan = ""; @State private var quickConnect = ""; @State private var enabled = false; @State private var saving = false; @State private var message: String?
+    @State private var lan = ""
+    @State private var remoteURL = ""
+    @State private var quickConnect = ""
+    @State private var enabled = false
+    @State private var saving = false
+    @State private var message: String?
     var body: some View {
         Form {
             Toggle("Switch connections automatically", isOn: $enabled)
-            TextField("LAN URL, including http:// or https://", text: $lan).textInputAutocapitalization(.never).autocorrectionDisabled()
-            TextField("QuickConnect ID", text: $quickConnect).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Text("Fotera prefers your LAN address when it reaches the same NAS, then uses the current remote connection or QuickConnect. Your account and backup history stay the same. LAN HTTP is unencrypted.").font(.footnote).foregroundStyle(.secondary)
-            Button("Save connections") { Task { await save() } }.disabled(saving)
-            if let message { Text(message).font(.footnote) }
+            Section("Local network") {
+                TextField("LAN URL, including http:// or https://", text: $lan)
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            Section("Remote connection") {
+                TextField("https://nas.example.com:5001", text: $remoteURL)
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .accessibilityLabel("Remote HTTPS URL")
+                Text("Enter your full HTTPS server address, including a port if needed.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                TextField("QuickConnect ID (optional fallback)", text: $quickConnect)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            Section {
+                Text("Fotera prefers LAN, then your remote HTTPS URL, then other saved routes or QuickConnect. Each address must reach the same NAS. Your account and backup history stay the same. LAN HTTP is unencrypted.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button("Save connections") { Task { await save() } }.disabled(saving)
+                if !app.activeConnection.isEmpty { LabeledContent("Current connection", value: app.activeConnectionLabel) }
+                if let message { Text(message).font(.footnote) }
+            }
         }.navigationTitle("Connections").task {
-            if let data = UserDefaults.standard.data(forKey: "routes." + LibraryCache.hash(app.address)), let profile = try? JSONDecoder().decode(RouteProfile.self, from: data) { lan = profile.lan; quickConnect = profile.quickConnect; enabled = profile.enabled }
+            if let data = UserDefaults.standard.data(forKey: "routes." + LibraryCache.hash(app.address)),
+               let profile = try? JSONDecoder().decode(RouteProfile.self, from: data) {
+                lan = profile.lan; remoteURL = profile.remoteURL ?? ""; quickConnect = profile.quickConnect; enabled = profile.enabled
+            }
+            if remoteURL.isEmpty, let original = try? DSMClient.normalize(app.address),
+               original.scheme == "https", !ConnectionAddress.isLAN(original.host ?? "") { remoteURL = original.absoluteString }
         }
     }
     private func save() async {
-        guard let client = app.client else { return }; saving = true; defer { saving = false }
-        do { try await client.configureRoutes(lan: lan.trimmingCharacters(in: .whitespacesAndNewlines), quickConnect: quickConnect.trimmingCharacters(in: .whitespacesAndNewlines), enabled: enabled); message = "Saved. Current connection: \(await client.base.absoluteString)" }
-        catch { message = error.localizedDescription }
+        guard let client = app.client else { return }
+        saving = true; message = nil; defer { saving = false }
+        do {
+            try await client.configureRoutes(lan: lan.trimmingCharacters(in: .whitespacesAndNewlines), remoteURL: remoteURL,
+                                             quickConnect: quickConnect.trimmingCharacters(in: .whitespacesAndNewlines), enabled: enabled)
+            message = "Connections saved."
+        } catch { message = error.localizedDescription }
     }
 }
 

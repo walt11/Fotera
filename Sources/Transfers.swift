@@ -2,6 +2,8 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 import CryptoKit
+import ImageIO
+import AVFoundation
 
 enum TransferState: String, Codable {
     case queued = "Queued", uploading = "Uploading", uploaded = "Uploaded", verifying = "Verifying"
@@ -336,13 +338,7 @@ struct TransferRecord: Codable, Identifiable {
                 defer { try? FileManager.default.removeItem(at: file) }
                 duplicateDigests[key] = try await Task.detached(priority: .utility) {
                     try Task.checkCancellation()
-                    var hashes: Set<String> = [try Self.digest(file).0]
-                    if photo.isLive {
-                        let package = try OriginalPackage.unpack(file)
-                        defer { try? FileManager.default.removeItem(at: package.directory) }
-                        for part in package.files { hashes.insert(try Self.digest(part).0) }
-                    }
-                    return hashes
+                    return try await Self.originalDigests(file, live: photo.isLive)
                 }.value
             }
             if photo.thumbnailSource != nil, let hashes = duplicateDigests[key], duplicateIndex[key] != hashes {
@@ -405,6 +401,8 @@ struct TransferRecord: Codable, Identifiable {
             return true
         } catch {
             guard let j = records.firstIndex(where: { $0.id == id }) else { return false }
+            // Suspension and deadline expiry are not failed upload attempts.
+            if Task.isCancelled { return false }
             if case ConnectionError.server(let code) = error, code == 621 || code == 642 {
                 records[j].state = .failed
             } else {
@@ -525,6 +523,7 @@ struct TransferRecord: Codable, Identifiable {
         } catch {
             guard let j = records.firstIndex(where: { $0.id == id }) else { return false }
             records[j].state = .uploaded
+            if Task.isCancelled { persist(); return true }
             records[j].verificationAttempts = (records[j].verificationAttempts ?? 0) + 1
             records[j].verificationRetryAt = Date().addingTimeInterval(min(3600, 15 * pow(2, Double(min(records[j].verificationAttempts ?? 1, 8)))))
             records[j].message = "Uploaded; verification will retry. " + error.localizedDescription
@@ -555,6 +554,37 @@ struct TransferRecord: Codable, Identifiable {
         records[0].state = .uploading; persist()
     }
     #endif
+    /// Synology may label an item "live" but return only its still original.
+    /// Recognize the actual payload; never treat a failed archive parse as proof of a duplicate.
+    nonisolated static func originalDigests(_ file: URL, live: Bool) async throws -> Set<String> {
+        var hashes: Set<String> = [try digest(file).0]
+        guard live else { return hashes }
+        if let image = CGImageSourceCreateWithURL(file as CFURL, nil),
+           CGImageSourceGetCount(image) > 0, CGImageSourceGetStatus(image) == .statusComplete {
+            return hashes
+        }
+        // A motion component can likewise be returned directly. Validate it as a video
+        // before accepting its fingerprint; HTML, error pages and damaged ZIPs still fail.
+        let handle = try FileHandle(forReadingFrom: file)
+        let header = try handle.read(upToCount: 12) ?? Data(); try handle.close()
+        if header.count >= 8, header.subdata(in: 4..<8) == Data("ftyp".utf8) {
+            // Downloads requested as packages have a .zip suffix. AVFoundation uses the
+            // suffix when choosing its reader, so validate ISO media under a media suffix.
+            let media = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
+            try FileManager.default.copyItem(at: file, to: media)
+            defer { try? FileManager.default.removeItem(at: media) }
+            let asset = AVURLAsset(url: media)
+            if let tracks = try? await asset.loadTracks(withMediaType: .video), !tracks.isEmpty {
+                try Task.checkCancellation()
+                return hashes
+            }
+        }
+        try Task.checkCancellation()
+        let package = try OriginalPackage.unpack(file)
+        defer { try? FileManager.default.removeItem(at: package.directory) }
+        for part in package.files { hashes.insert(try digest(part).0) }
+        return hashes
+    }
     nonisolated static func digest(_ url: URL) throws -> (String, Int64) {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }

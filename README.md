@@ -65,3 +65,7 @@ Unit tests: `xcodebuild -project Fotera.xcodeproj -scheme Fotera -destination 'p
 Launch arguments (Debug only): `--fotera-verify` runs NAS checks and writes `Documents/verification.txt`. `--fotera-screen viewer|info|search|library|backup|settings|select` opens a screen for screenshots.
 
 See `IMPLEMENTATION.md` for architecture, fixed bugs and remaining work.
+
+### HEIC previews
+
+Fotera creates local previews when NAS thumbnails are missing. For imported HEIC photos that still show placeholders, open **Settings → Storage → Generate HEIC previews**, then tap **Generate previews**. Keep that screen open; Stop or leaving the screen cancels further work while preserving completed previews. This can download many originals, so use Wi-Fi for a large library. HEIC files over 50 MB are skipped. Generated previews appear only in Fotera and are subject to its 300 MB preview-cache limit; this does not generate Synology Photos server previews or alter the originals.

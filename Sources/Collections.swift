@@ -770,19 +770,74 @@ struct GroupListView: View {
     }
 }
 
-/// Photos on a map, clustered to a grid that adapts to the zoom level.
+/// Plain values can cross to the clustering worker without carrying MapKit UI state.
+struct PhotoMapViewport: Hashable, Sendable {
+    let latitude: Double
+    let longitude: Double
+    let latitudeSpan: Double
+    let longitudeSpan: Double
+    static let world = PhotoMapViewport(latitude: 0, longitude: 0, latitudeSpan: 180, longitudeSpan: 360)
+}
+struct PhotoMapCluster: Identifiable, Sendable {
+    let id: Int
+    let latitude: Double
+    let longitude: Double
+    let items: [RemotePhoto]
+    var coordinate: CLLocationCoordinate2D { .init(latitude: latitude, longitude: longitude) }
+}
+enum PhotoMapClustering {
+    /// An 8 x 8 viewport grid caps rendering work at 64 markers, regardless of library size.
+    nonisolated static func build(_ photos: [RemotePhoto], viewport: PhotoMapViewport) throws -> [PhotoMapCluster] {
+        guard viewport.latitude.isFinite, viewport.longitude.isFinite,
+              viewport.latitudeSpan.isFinite, viewport.longitudeSpan.isFinite,
+              viewport.latitudeSpan > 0, viewport.longitudeSpan > 0 else { return [] }
+        let height = min(180, viewport.latitudeSpan), width = min(360, viewport.longitudeSpan)
+        let bottom = viewport.latitude - height / 2
+        struct Bucket {
+            var items: [RemotePhoto] = []
+            var latitude = 0.0
+            var longitudeOffset = 0.0
+        }
+        func wrap(_ longitude: Double) -> Double {
+            let value = (longitude + 180).truncatingRemainder(dividingBy: 360)
+            return (value < 0 ? value + 360 : value) - 180
+        }
+        var buckets: [Int: Bucket] = [:]
+        for (index, photo) in photos.enumerated() {
+            if index % 256 == 0 { try Task.checkCancellation() }
+            guard let gps = photo.additional?.gps, gps.latitude.isFinite, gps.longitude.isFinite,
+                  (-90...90).contains(gps.latitude), (-180...180).contains(gps.longitude) else { continue }
+            let offset = wrap(gps.longitude - viewport.longitude)
+            guard gps.latitude >= bottom, gps.latitude <= bottom + height,
+                  abs(offset) <= width / 2 else { continue }
+            let row = min(7, max(0, Int(((gps.latitude - bottom) / height * 8).rounded(.down))))
+            let column = min(7, max(0, Int(((offset + width / 2) / width * 8).rounded(.down))))
+            let key = row * 8 + column
+            buckets[key, default: Bucket()].items.append(photo)
+            buckets[key]!.latitude += gps.latitude
+            buckets[key]!.longitudeOffset += offset
+        }
+        try Task.checkCancellation()
+        return buckets.keys.sorted().map { key in
+            let bucket = buckets[key]!
+            let count = Double(bucket.items.count)
+            return PhotoMapCluster(id: key, latitude: bucket.latitude / count,
+                                   longitude: wrap(viewport.longitude + bucket.longitudeOffset / count), items: bucket.items)
+        }
+    }
+}
+
+/// Visible photos are clustered off the main thread; camera movement cancels obsolete work.
 struct PhotoMapView: View {
     let photos: [RemotePhoto]
     @EnvironmentObject private var app: AppModel
-    @State private var clusters: [Cluster] = []
-    @State private var selected: Cluster?
-    struct Cluster: Identifiable {
-        let id: String
-        let coordinate: CLLocationCoordinate2D
-        let items: [RemotePhoto]
-    }
+    @State private var clusters: [PhotoMapCluster] = []
+    @State private var selected: PhotoMapCluster?
+    @State private var viewport = PhotoMapViewport.world
+    @State private var loading = true
     var body: some View {
-        Map(initialPosition: .automatic) {
+        // A fixed initial region avoids automatic camera fitting reacting to every cluster update.
+        Map(initialPosition: .rect(.world)) {
             ForEach(clusters) { cluster in
                 Annotation("", coordinate: cluster.coordinate) {
                     Button { selected = cluster } label: {
@@ -801,26 +856,32 @@ struct PhotoMapView: View {
                 }
             }
         }
-        .onMapCameraChange(frequency: .onEnd) { context in recluster(span: context.region.span) }
-        .onAppear { recluster(span: MKCoordinateSpan(latitudeDelta: 60, longitudeDelta: 60)) }
+        .onMapCameraChange(frequency: .onEnd) { context in
+            viewport = PhotoMapViewport(latitude: context.region.center.latitude, longitude: context.region.center.longitude,
+                                        latitudeSpan: context.region.span.latitudeDelta, longitudeSpan: context.region.span.longitudeDelta)
+        }
+        .task(id: viewport) {
+            loading = true
+            let items = photos, region = viewport
+            let worker = Task.detached(priority: .userInitiated) { try PhotoMapClustering.build(items, viewport: region) }
+            do {
+                let result = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: { worker.cancel() }
+                try Task.checkCancellation()
+                clusters = result
+                loading = false
+            } catch {
+                if !Task.isCancelled { loading = false }
+            }
+        }
+        .overlay(alignment: .top) {
+            if loading { ProgressView("Loading locations…").padding(10).background(.regularMaterial, in: Capsule()).padding() }
+        }
         .navigationTitle("Map").navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selected) { cluster in
             NavigationStack { LocalCollectionScreen(title: "\(cluster.items.count) photos", items: cluster.items) }
                 .presentationDetents([.medium, .large])
-        }
-    }
-    private func recluster(span: MKCoordinateSpan) {
-        let cell = max(0.0005, max(span.latitudeDelta, span.longitudeDelta) / 8)
-        var buckets: [String: [RemotePhoto]] = [:]
-        for photo in photos {
-            guard let gps = photo.additional?.gps else { continue }
-            let key = "\(Int((gps.latitude / cell).rounded(.down)))|\(Int((gps.longitude / cell).rounded(.down)))"
-            buckets[key, default: []].append(photo)
-        }
-        clusters = buckets.map { key, items in
-            let lat = items.reduce(0) { $0 + ($1.additional?.gps?.latitude ?? 0) } / Double(items.count)
-            let lon = items.reduce(0) { $0 + ($1.additional?.gps?.longitude ?? 0) } / Double(items.count)
-            return Cluster(id: key, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), items: items)
         }
     }
 }
@@ -934,3 +995,27 @@ struct PersonNameEditor: View {
         }
     }
 }
+
+#if DEBUG
+/// Isolated UI stress check: synthetic metadata only; does not restore a NAS session.
+struct MapStressPreview: View {
+    @State private var photos: [RemotePhoto] = []
+    var body: some View {
+        NavigationStack {
+            VStack {
+                if photos.isEmpty { ProgressView("Preparing test library") }
+                else { NavigationLink("Open 100,000-photo map") { PhotoMapView(photos: photos) } }
+            }.navigationTitle("Map performance check")
+        }.task {
+            photos = await Task.detached(priority: .userInitiated) {
+                (0..<100_000).map { index in
+                    var photo = RemotePhoto(id: index, filename: "Test.heic", time: nil, type: "photo", additional: nil)
+                    photo.additional = .init(thumbnail: nil, gps: .init(latitude: Double(index % 160) - 80,
+                                                                      longitude: Double((index * 17) % 360) - 180), video_meta: nil)
+                    return photo
+                }
+            }.value
+        }
+    }
+}
+#endif

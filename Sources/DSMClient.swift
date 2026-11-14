@@ -11,7 +11,31 @@ struct Envelope<T: Decodable>: Decodable {
     let data: T?
     let error: APIError?
 }
-struct APIError: Decodable { let code: Int }
+struct APIError: Decodable {
+    let code: Int
+    let errors: AuthenticationDetails?
+    struct AuthenticationDetails: Decodable { let token: String? }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        code = try values.decode(Int.self, forKey: .code)
+        // Other APIs use arrays or unrelated objects for errors.
+        errors = try? values.decode(AuthenticationDetails.self, forKey: .errors)
+    }
+    private enum CodingKeys: String, CodingKey { case code, errors }
+}
+
+/// An in-memory continuation from DSM's password step. Never persisted or logged.
+struct LoginChallenge {
+    let username: String
+    let password: String
+    let token: String
+    let created: Date
+    func continuation(username: String, password: String, otp: String, now: Date = Date()) -> String? {
+        guard !otp.isEmpty, self.username == username, self.password == password,
+              now.timeIntervalSince(created) >= 0, now.timeIntervalSince(created) < 300 else { return nil }
+        return token
+    }
+}
 struct EmptyPayload: Decodable {}
 
 enum ConnectionError: LocalizedError, Equatable {
@@ -44,11 +68,12 @@ enum ConnectionError: LocalizedError, Equatable {
 }
 
 enum AuthError: LocalizedError {
-    case badCredentials, otpRequired, otpInvalid, disabled, blocked, passwordExpired, enforce2FA, other(Int)
+    case badCredentials, permissionDenied, otpRequired, otpInvalid, disabled, blocked, passwordExpired, enforce2FA, other(Int)
     init(code: Int) {
         switch code {
         case 400: self = .badCredentials
         case 401: self = .disabled
+        case 402: self = .permissionDenied
         case 403: self = .otpRequired
         case 404: self = .otpInvalid
         case 406: self = .enforce2FA
@@ -60,6 +85,7 @@ enum AuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .badCredentials: return "Incorrect username or password."
+        case .permissionDenied: return "DSM denied this sign-in (402). Check that this account is allowed to use Synology Photos and that the address points to the Photos or DSM login service."
         case .otpRequired: return "Enter the code from your authenticator app."
         case .otpInvalid: return "That verification code didn’t work. Try the current code."
         case .disabled: return "This DSM account is disabled."
@@ -84,6 +110,7 @@ enum ItemFilter: Hashable, Sendable {
 }
 
 extension Notification.Name {
+    static let foteraRouteChanged = Notification.Name("FoteraRouteChanged")
     static let foteraSessionExpired = Notification.Name("FoteraSessionExpired")
     static let foteraPeopleChanged = Notification.Name("FoteraPeopleChanged")
 }
@@ -93,7 +120,10 @@ actor DSMClient {
     /// The HTTPS endpoint the account was opened with. Passwords are only sent here when a LAN HTTP route is active.
     private let secureBase: URL?
     private var routeChecked = Date.distantPast
-    private var selectingRoute = false
+    private var routeSelectionTask: Task<Void, Never>?
+    private var routeSelectionID = UUID()
+    private var lanAvailable = true
+    private var activeReads: [UUID: (url: URL, task: Task<(Data, URLResponse), Error>)] = [:]
     nonisolated let address: String
     private let session: URLSession
     private var sid: String?
@@ -101,6 +131,7 @@ actor DSMClient {
     private var capabilities: [String: APIInfo] = [:]
     private var credentials: Credentials?
     private var reauthTask: Task<Void, Error>?
+    private var loginChallenge: LoginChallenge?
     private var folderIDs: [String: Int] = [:]
     static let pageSize = 500
 
@@ -140,25 +171,27 @@ actor DSMClient {
         secureBase = base.scheme == "https" ? base : nil
         self.address = resolvedBase == nil ? base.absoluteString : address
         let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = nil
+        // Ephemeral configuration owns an in-memory cookie store. Keep the NAS's
+        // password/OTP handshake cookies on this client, never in shared storage.
         config.urlCache = nil
         config.timeoutIntervalForRequest = 30
         config.httpMaximumConnectionsPerHost = 6
         session = URLSession(configuration: config, delegate: RejectRedirects(), delegateQueue: nil)
     }
 
-    func configureRoutes(lan: String, quickConnect: String, enabled: Bool) async throws {
+    func configureRoutes(lan: String, remoteURL: String = "", quickConnect: String, enabled: Bool) async throws {
         let local = lan.isEmpty ? nil : try Self.normalize(lan)
         if let local, !ConnectionAddress.isLAN(local.host ?? "") { throw ConnectionError.invalidAddress }
         guard quickConnect.isEmpty || ConnectionAddress.quickConnectID(quickConnect) != nil else { throw ConnectionError.invalidAddress }
+        let remote = try RouteProfile.remoteAddress(remoteURL)
         let identity = enabled ? try await Self.nasIdentity(base) : ""
-        let profile = RouteProfile(lan: local?.absoluteString ?? "", quickConnect: quickConnect, enabled: enabled, identity: identity)
+        let profile = RouteProfile(lan: local?.absoluteString ?? "", quickConnect: quickConnect, remoteURL: remote?.absoluteString, enabled: enabled, identity: identity)
         UserDefaults.standard.set(try JSONEncoder().encode(profile), forKey: "routes." + LibraryCache.hash(address))
-        routeChecked = .distantPast
-        await selectPreferredRoute()
+        await refreshConnectionRoute()
     }
     static func nasIdentity(_ base: URL) async throws -> String {
         let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = 2
+        config.timeoutIntervalForResource = 3; config.waitsForConnectivity = false
         let probe = URLSession(configuration: config, delegate: RejectRedirects(), delegateQueue: nil)
         defer { probe.invalidateAndCancel() }
         var url = URLComponents(url: base.appendingPathComponent("webman/pingpong.cgi"), resolvingAgainstBaseURL: false)!
@@ -169,24 +202,47 @@ actor DSMClient {
         guard (response as? HTTPURLResponse)?.statusCode == 200, result.success, !result.ezid.isEmpty else { throw ConnectionError.invalidResponse }
         return result.ezid
     }
-    func refreshConnectionRoute() async { routeChecked = .distantPast; await selectPreferredRoute() }
-    private func selectPreferredRoute() async {
-        guard !selectingRoute, Date().timeIntervalSince(routeChecked) > 30 else { return }
+    func refreshConnectionRoute(allowLAN: Bool? = nil) async {
+        if let allowLAN, allowLAN != lanAvailable {
+            lanAvailable = allowLAN
+            routeSelectionTask?.cancel()
+            routeSelectionTask = nil
+            routeSelectionID = UUID()
+        }
+        await selectPreferredRoute(force: true)
+    }
+    /// A throttled check (at most every 30 seconds) for periodic monitoring.
+    func checkRouteIfStale() async { await selectPreferredRoute() }
+    private func selectPreferredRoute(force: Bool = false) async {
+        // Every caller waits for the same selection instead of continuing on a stale route.
+        if let task = routeSelectionTask {
+            let generation = routeSelectionID
+            await task.value
+            // A network change may replace the selection while this caller waits.
+            if generation != routeSelectionID { await selectPreferredRoute() }
+            return
+        }
+        guard force || Date().timeIntervalSince(routeChecked) > 30 else { return }
+        let generation = UUID(); routeSelectionID = generation
+        let task = Task { await self.resolvePreferredRoute() }
+        routeSelectionTask = task
+        await task.value
+        if routeSelectionID == generation { routeSelectionTask = nil }
+    }
+    private func resolvePreferredRoute() async {
         routeChecked = Date()
         guard let data = UserDefaults.standard.data(forKey: "routes." + LibraryCache.hash(address)),
               let profile = try? JSONDecoder().decode(RouteProfile.self, from: data), profile.enabled else { return }
-        selectingRoute = true
-        defer { selectingRoute = false }
-        if let local = try? Self.normalize(profile.lan), let identity = try? await Self.nasIdentity(local), identity == profile.identity {
-            await switchBase(to: local); return
+        if let candidate = await profile.verifiedDirectRoute(current: base, canonical: address, allowLAN: lanAvailable,
+                                                             probe: { try await Self.nasIdentity($0) }) {
+            guard !Task.isCancelled else { return }
+            await switchBase(to: candidate); return
         }
-        if let identity = try? await Self.nasIdentity(base), identity == profile.identity { return }
-        if let canonical = try? Self.normalize(address), canonical != base,
-           let identity = try? await Self.nasIdentity(canonical), identity == profile.identity {
-            await switchBase(to: canonical); return
-        }
+        guard !Task.isCancelled else { return }
         if let id = ConnectionAddress.quickConnectID(profile.quickConnect), let remote = try? await QuickConnectResolver.resolve(id),
-           let identity = try? await Self.nasIdentity(remote), identity == profile.identity { await switchBase(to: remote) }
+           let identity = try? await Self.nasIdentity(remote), identity == profile.identity, !Task.isCancelled {
+            await switchBase(to: remote)
+        }
     }
     /// Uploads already in flight keep their original route unless it was a LAN address we just lost,
     /// so a large video isn't restarted every time the preferred route changes.
@@ -194,8 +250,12 @@ actor DSMClient {
         guard new != base else { return }
         let previous = base
         base = new
+        for read in activeReads.values where !Self.sameOrigin(read.url, new) { read.task.cancel() }
+        await MainActor.run {
+            NotificationCenter.default.post(name: .foteraRouteChanged, object: self, userInfo: ["url": new.absoluteString])
+        }
         if ConnectionAddress.isLAN(previous.host ?? ""), !ConnectionAddress.isLAN(new.host ?? "") {
-            await BackgroundUploads.shared.migrateUploads(from: previous)
+            Task { await BackgroundUploads.shared.migrateUploads(from: previous) }
         }
     }
     // MARK: Transport
@@ -204,8 +264,11 @@ actor DSMClient {
         // Choose a route once before the first request; afterwards re-check in the background so
         // probes of an unreachable LAN address never stall browsing.
         if override == nil {
+            // Only the very first request waits for a route. Later checks run alongside requests:
+            // waiting on them stalled browsing for seconds while an unreachable LAN address timed out.
+            // Reads in flight to the old origin are cancelled and retried when the route switches.
             if routeChecked == .distantPast { await selectPreferredRoute() }
-            else if Date().timeIntervalSince(routeChecked) > 120 { Task { await self.selectPreferredRoute() } }
+            else if routeSelectionTask == nil, Date().timeIntervalSince(routeChecked) > 120 { Task { await self.selectPreferredRoute() } }
         }
         guard !path.contains(".."), !path.contains(":"), !path.hasPrefix("/") else { throw ConnectionError.invalidResponse }
         var request = URLRequest(url: (override ?? base).appendingPathComponent("webapi").appendingPathComponent(path))
@@ -220,11 +283,40 @@ actor DSMClient {
             "\($0.key.addingPercentEncoding(withAllowedCharacters: formAllowed)!)=\($0.value.addingPercentEncoding(withAllowedCharacters: formAllowed)!)"
         }.joined(separator: "&")
     }
+    nonisolated static func sameOrigin(_ first: URL, _ second: URL) -> Bool {
+        first.scheme == second.scheme && first.host == second.host && first.port == second.port
+    }
+    private func readData(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let id = UUID(), transport = session
+        let task = Task { try await transport.data(for: request) }
+        activeReads[id] = (request.url!, task)
+        defer { activeReads[id] = nil }
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
     private func send(_ path: String, _ fields: [String: String], via override: URL? = nil) async throws -> Data {
-        let (data, response) = try await session.data(for: makeRequest(path, fields, via: override))
+        let request = try await makeRequest(path, fields, via: override)
+        let readOnly = override == nil && ["get", "list", "count", "query"].contains(fields["method"] ?? "")
+        let data: Data, response: URLResponse
+        do {
+            if readOnly { (data, response) = try await readData(request) }
+            else { (data, response) = try await session.data(for: request) }
+        } catch {
+            guard !Task.isCancelled, override == nil else { throw error }
+            let switched = request.url.map { !Self.sameOrigin($0, base) } ?? false
+            let cancelledForSwitch = readOnly && switched && ((error as? URLError)?.code == .cancelled || error is CancellationError)
+            guard Self.isRouteFailure(error) || cancelledForSwitch else { throw error }
+            if !switched { await refreshConnectionRoute() }
+            guard readOnly, let old = request.url, !Self.sameOrigin(old, base) else { throw error }
+            // Retry once, after waiting for any route selection in progress. Never replay writes or OTPs.
+            (data, response) = try await readData(makeRequest(path, fields))
+        }
         guard let http = response as? HTTPURLResponse else { throw ConnectionError.invalidResponse }
         guard http.statusCode == 200 else { throw ConnectionError.http(http.statusCode) }
         return data
+    }
+    nonisolated static func isRouteFailure(_ error: Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        return [.cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .networkConnectionLost, .notConnectedToInternet, .timedOut].contains(error.code)
     }
     static func decode<T: Decodable>(_ data: Data, as type: T.Type) throws -> T {
         let result: Envelope<T>
@@ -292,16 +384,25 @@ actor DSMClient {
 
     // MARK: Authentication
 
-    private func login(_ account: Credentials, otp: String) async throws -> Credentials {
+    nonisolated static func loginVersion(_ info: APIInfo) -> Int? {
+        [7, 6].first { info.minVersion <= $0 && info.maxVersion >= $0 }
+    }
+
+    private func login(_ account: Credentials, otp: String, sessionName: String = "webui") async throws -> Credentials {
         if capabilities.isEmpty { try await discover() }
-        guard let auth = capabilities["SYNO.API.Auth"], auth.minVersion <= 6, auth.maxVersion >= 6 else { throw ConnectionError.unavailable }
-        struct Login: Decodable { let sid: String; let did: String? }
-        var fields = ["api": "SYNO.API.Auth", "version": "6", "method": "login", "account": account.username,
-                      "passwd": account.password, "session": "PhotoHarbor", "format": "sid"]
+        guard let auth = capabilities["SYNO.API.Auth"],
+              let authVersion = Self.loginVersion(auth) else { throw ConnectionError.unavailable }
+        struct Login: Decodable { let sid: String; let did: String?; let device_id: String? }
+        let continuation = loginChallenge?.continuation(username: account.username, password: account.password, otp: otp)
+        if continuation == nil { loginChallenge = nil }
+        var fields = ["api": "SYNO.API.Auth", "version": String(authVersion), "method": "login", "account": account.username,
+                      "passwd": continuation ?? account.password, "session": sessionName, "format": "sid",
+                      // The NAS's Photos login redirect and helper supply this application context.
+                      "app_name": "SYNO.Foto.AppInstance", "launchApp": "SYNO.Foto.Sharing.AppInstance",
+                      "photos_action": "external_login", "client": "browser", "logintype": "local",
+                      "device_name": "Fotera iOS", "enable_device_token": credentials != nil ? "yes" : "no"]
         if !otp.isEmpty {
             fields["otp_code"] = otp
-            fields["enable_device_token"] = "yes"
-            fields["device_name"] = "Fotera iOS"
         } else if let device = account.deviceID, !device.isEmpty {
             fields["device_id"] = device
             fields["device_name"] = "Fotera iOS"
@@ -309,12 +410,33 @@ actor DSMClient {
         // Never send the password over an automatically selected HTTP LAN route when an HTTPS endpoint exists.
         let authBase = base.scheme == "http" ? secureBase : nil
         let result: Login
-        do { result = try Self.decode(try await send(auth.path, fields, via: authBase), as: Login.self) }
-        catch ConnectionError.server(let code) { throw AuthError(code: code) }
+        let data = try await send(auth.path, fields, via: authBase)
+        let response: Envelope<Login>
+        do { response = try JSONDecoder().decode(Envelope<Login>.self, from: data) }
+        catch { throw ConnectionError.invalidResponse }
+        #if DEBUG
+        // Only fixed labels, codes and booleans: never credentials, tokens or response bodies.
+        let report = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("login-verification.txt")
+        let line = "success=\(response.success) code=\(response.error?.code ?? 0) challengeReturned=\(response.error?.errors?.token != nil) challengeUsed=\(continuation != nil) photosApplication=true version=\(authVersion) photosLaunch=true privateCookies=true"
+        let previous = (try? String(contentsOf: report, encoding: .utf8)) ?? ""
+        let lines = (previous.split(separator: "\n").map(String.init) + [line]).suffix(8)
+        try? lines.joined(separator: "\n").write(to: report, atomically: true, encoding: .utf8)
+        #endif
+        guard response.success else {
+            let code = response.error?.code ?? -1
+            if code == 403, let token = response.error?.errors?.token, !token.isEmpty {
+                // Synology's own login flow sends this token in passwd with the OTP.
+                loginChallenge = LoginChallenge(username: account.username, password: account.password, token: token, created: Date())
+            } else if code != 404 { loginChallenge = nil }
+            throw AuthError(code: code)
+        }
+        guard let payload = response.data else { throw ConnectionError.invalidResponse }
+        result = payload
+        loginChallenge = nil
         sid = result.sid
         username = account.username
         var updated = account
-        if let did = result.did, !did.isEmpty { updated.deviceID = did }
+        if let did = result.device_id ?? result.did, !did.isEmpty { updated.deviceID = did }
         if credentials != nil {
             credentials = updated
             try? CredentialStore.save(updated, address: address)
@@ -322,6 +444,14 @@ actor DSMClient {
         try? SessionStore.save(SavedSession(address: address, username: account.username, sid: result.sid, resolvedAddress: ConnectionAddress.quickConnectID(address) == nil ? nil : base.absoluteString), background: credentials != nil)
         return updated
     }
+    #if DEBUG
+    func verifyLoginSession(_ name: String) async throws {
+        guard let stored = CredentialStore.load(), stored.address == address, stored.username == username else {
+            throw FeatureError.message("No matching saved credentials for this login check")
+        }
+        _ = try await login(stored, otp: "", sessionName: name)
+    }
+    #endif
     func signIn(username: String, password: String, otp: String, remember: Bool) async throws {
         let previousDevice = CredentialStore.load().flatMap { $0.address == address && $0.username == username ? $0.deviceID : nil }
         let account = Credentials(address: address, username: username, password: password, deviceID: previousDevice)
@@ -354,7 +484,7 @@ actor DSMClient {
     func disconnect() async {
         defer { sid = nil; credentials = nil; session.invalidateAndCancel() }
         guard let sid, let auth = capabilities["SYNO.API.Auth"] else { return }
-        _ = try? await send(auth.path, ["api": "SYNO.API.Auth", "version": "6", "method": "logout", "session": "PhotoHarbor", "_sid": sid])
+        _ = try? await send(auth.path, ["api": "SYNO.API.Auth", "version": "6", "method": "logout", "_sid": sid])
     }
     func currentSessionID() -> String? { sid }
 

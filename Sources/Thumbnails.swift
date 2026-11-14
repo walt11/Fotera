@@ -29,6 +29,10 @@ import ImageIO
 }
 
 /// Loads, decodes, and caches server previews in memory and on disk. One request per image at a time.
+extension Notification.Name {
+    /// Posted with the photo ID when a preview is regenerated, so only that photo's tiles reload.
+    static let foteraPreviewRegenerated = Notification.Name("FoteraPreviewRegenerated")
+}
 @MainActor final class ImagePipeline {
     static let shared = ImagePipeline()
     private let memory = NSCache<NSString, UIImage>()
@@ -117,38 +121,60 @@ import ImageIO
             }
         }
     }
+    nonisolated static func isHEIC(_ photo: RemotePhoto) -> Bool {
+        !photo.isVideo && ["heic", "heif", "hif"].contains((photo.filename as NSString).pathExtension.lowercased())
+    }
     /// Some NAS items have no generated previews yet. Build a small local preview from the still original.
     /// Avoid unexpectedly downloading full videos or large RAW files while scrolling.
-    func originalPreview(_ photo: RemotePhoto, shared: Bool, size: ThumbnailSize) async -> UIImage? {
+    func originalPreview(_ photo: RemotePhoto, shared: Bool, size: ThumbnailSize, regenerate: Bool = false) async -> UIImage? {
         // RAW originals are large and slow to decode; leave those as placeholders until the NAS makes a preview.
         let raw: Set<String> = ["dng", "arw", "cr2", "cr3", "nef", "orf", "raf", "rw2", "srw", "pef"]
         guard !photo.isVideo, !raw.contains((photo.filename as NSString).pathExtension.lowercased()),
-              let bytes = photo.filesize, bytes > 0, bytes <= 15_000_000, let client else { return nil }
-        let source = photo.thumbnailSource ?? ThumbnailSource(id: photo.id, cacheKey: "original-\(photo.time ?? 0)-\(bytes)", kind: "unit")
+              let client else { return nil }
+        let limit: Int64 = Self.isHEIC(photo) ? 50_000_000 : 15_000_000
+        if let bytes = photo.filesize, (bytes <= 0 || bytes > limit) { return nil }
+        let source = photo.thumbnailSource ?? ThumbnailSource(id: photo.id, cacheKey: "original-\(photo.time ?? 0)-\(photo.filesize ?? -1)", kind: "unit")
         let cacheKey = key(source, shared, size)
-        if let image = memory.object(forKey: cacheKey as NSString) { return image }
-        let requestKey = cacheKey + "|original"
+        if !regenerate, let image = memory.object(forKey: cacheKey as NSString) { return image }
+        let requestKey = cacheKey + (regenerate ? "|regenerate" : "|original")
         if var entry = inflight[requestKey] {
             entry.waiters += 1; inflight[requestKey] = entry
             return await wait(for: requestKey, entry.task)
         }
+        let gridKeys = [ThumbnailSize.sm, .m].map { key(source, shared, $0) }
         let limiter = originalLimiter
         let task = Task<UIImage?, Never> {
-            if let data = await LibraryCache.shared.preview(key: cacheKey), let image = await Self.decode(data, maxPixels: size == .xl ? 2400 : 480) { return image }
+            if !regenerate, let data = await LibraryCache.shared.preview(key: cacheKey), let image = await Self.decode(data, maxPixels: size == .xl ? 2400 : 480) { return image }
             do {
                 try await limiter.acquire(); defer { limiter.release() }
                 try Task.checkCancellation()
+                if photo.filesize == nil {
+                    let details = try await client.details(id: photo.id, shared: shared)
+                    guard let bytes = details.filesize, bytes > 0, bytes <= limit else { return nil }
+                }
                 let file = try await client.original(photo, shared: shared, useOfflineCache: true)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let image = await Self.decode(file: file, maxPixels: size == .xl ? 2400 : 480) else { return nil }
                 try Task.checkCancellation()
-                if let data = image.jpegData(compressionQuality: 0.85) { await LibraryCache.shared.savePreview(key: cacheKey, data: data) }
+                if let data = await Self.jpegPreview(image) {
+                    await LibraryCache.shared.savePreview(key: cacheKey, data: data)
+                    // A manual high-quality preview also replaces placeholder grid previews.
+                    if size == .xl, let small = await Self.decode(data, maxPixels: 480), let jpeg = await Self.jpegPreview(small) {
+                        for gridKey in gridKeys {
+                            await LibraryCache.shared.savePreview(key: gridKey, data: jpeg)
+                            self.memory.setObject(small, forKey: gridKey as NSString)
+                        }
+                    }
+                } else { return nil }
                 return image
             } catch { return nil }
         }
         inflight[requestKey] = (task, 1)
         let image = await wait(for: requestKey, task)
         if let image { memory.setObject(image, forKey: cacheKey as NSString, cost: Int(image.size.width * image.size.height * image.scale * image.scale * 4)) }
+        if regenerate, image != nil, !Task.isCancelled {
+            NotificationCenter.default.post(name: .foteraPreviewRegenerated, object: nil, userInfo: ["photo": photo.id, "unit": source.id])
+        }
         return image
     }
     private func wait(for key: String, _ task: Task<UIImage?, Never>) async -> UIImage? {
@@ -167,6 +193,18 @@ import ImageIO
         guard var entry = inflight[key], entry.task == task else { return }
         entry.waiters -= 1
         if entry.waiters <= 0 { entry.task.cancel(); inflight[key] = nil } else { inflight[key] = entry }
+    }
+    /// HDR/high-bit-depth HEIC thumbnails may not support UIImage.jpegData directly.
+    /// Render into standard-range RGB first so the persistent JPEG works on every screen.
+    nonisolated static func jpegPreview(_ image: UIImage) async -> Data? {
+        await Task.detached(priority: .utility) {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1; format.opaque = true; format.preferredRange = .standard
+            let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+            return renderer.jpegData(withCompressionQuality: 0.85) { _ in
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
+        }.value
     }
     /// Downsamples off the main thread so large previews never decode at full size.
     nonisolated static func decode(_ data: Data, maxPixels: CGFloat) async -> UIImage? {
@@ -198,7 +236,9 @@ struct ThumbnailView: View {
     var size: ThumbnailSize = .m
     var contentMode: ContentMode = .fill
     var fallbackPhoto: RemotePhoto? = nil
+    var animatesLoading = true
     @State private var image: UIImage?
+    @State private var revision = 0
     @Environment(\.scenePhase) private var scenePhase
     private struct RequestID: Hashable {
         let source: ThumbnailSource?
@@ -206,7 +246,8 @@ struct ThumbnailView: View {
         let size: String
         let active: Bool
         let photoID: Int?
-        var content: [AnyHashable] { [source, shared, size, photoID] }
+        let revision: Int
+        var content: [AnyHashable] { [source, shared, size, photoID, revision] }
     }
     @State private var shownFor: [AnyHashable]?
     var body: some View {
@@ -214,13 +255,18 @@ struct ThumbnailView: View {
             .overlay {
                 if let shown = image ?? source.flatMap({ ImagePipeline.shared.cached($0, shared: shared, size: size) }) {
                     Image(uiImage: shown).resizable().aspectRatio(contentMode: contentMode)
-                        .transition(.opacity)
+                        .transition(animatesLoading ? .opacity : .identity)
                 }
             }
             .clipped()
-            .task(id: RequestID(source: source, shared: shared, size: size.rawValue, active: scenePhase == .active, photoID: fallbackPhoto?.id)) {
+            .onReceive(NotificationCenter.default.publisher(for: .foteraPreviewRegenerated)) { note in
+                let photo = note.userInfo?["photo"] as? Int, unit = note.userInfo?["unit"] as? Int
+                guard (photo != nil && photo == fallbackPhoto?.id) || (unit != nil && unit == source?.id) else { return }
+                revision += 1
+            }
+            .task(id: RequestID(source: source, shared: shared, size: size.rawValue, active: scenePhase == .active, photoID: fallbackPhoto?.id, revision: revision)) {
                 // Keep the current image across scene changes so the app-switcher snapshot isn't blank.
-                let request = RequestID(source: source, shared: shared, size: size.rawValue, active: true, photoID: fallbackPhoto?.id)
+                let request = RequestID(source: source, shared: shared, size: size.rawValue, active: true, photoID: fallbackPhoto?.id, revision: revision)
                 if shownFor != request.content { image = nil; shownFor = request.content }
                 guard scenePhase == .active, image == nil else { return }
                 if let source, let cached = ImagePipeline.shared.cached(source, shared: shared, size: size) { image = cached; return }
@@ -236,7 +282,8 @@ struct ThumbnailView: View {
                     }
                     guard !Task.isCancelled else { return }
                     if let loaded {
-                        withAnimation(.easeOut(duration: 0.15)) { image = loaded }
+                        if animatesLoading { withAnimation(.easeOut(duration: 0.15)) { image = loaded } }
+                        else { image = loaded }
                         return
                     }
                 }

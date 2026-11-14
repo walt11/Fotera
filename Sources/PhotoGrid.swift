@@ -16,6 +16,10 @@ struct GridGroup: Identifiable {
 extension Array where Element == RemotePhoto {
     var asSingleSection: [GridSection] { isEmpty ? [] : [GridSection(id: "all", title: nil, items: self)] }
 }
+struct TimelineJump: Equatable {
+    let id = UUID()
+    let photoID: Int
+}
 struct ViewerRequest: Identifiable {
     let id: Int
     let items: [RemotePhoto]
@@ -28,6 +32,7 @@ struct PhotoGrid<Header: View>: View {
     @Binding var selection: Set<Int>?
     var album: RemoteAlbum? = nil
     var showsScrubber = false
+    var timelineJump: TimelineJump? = nil
     var onReachEnd: (() -> Void)? = nil
     var onChange: () -> Void = {}
     @ViewBuilder var header: () -> Header
@@ -40,6 +45,10 @@ struct PhotoGrid<Header: View>: View {
     @State private var viewer: ViewerRequest?
     @State private var scrollFraction: CGFloat = 0
     @State private var scrolling = false
+    @State private var handledJump: UUID?
+    @State private var highlightedJump: UUID?
+
+    private var usesTimelineScrubber: Bool { showsScrubber && sections.count > 6 }
 
     private var groups: [GridGroup] {
         var result: [GridGroup] = []
@@ -62,26 +71,42 @@ struct PhotoGrid<Header: View>: View {
                     if grouped {
                         ForEach(groups) { group in
                             Section {
-                                ForEach(group.sections) { section in sectionView(section, minor: true) }
+                                ForEach(group.sections) { section in sectionView(section, minor: true, proxy: proxy) }
                             } header: {
                                 if let title = group.title { monthHeader(title) }
                             }
                         }
                     } else {
                         // Most grids have no month groups; skip building them on every redraw.
-                        ForEach(sections) { section in sectionView(section, minor: false) }
+                        ForEach(sections) { section in sectionView(section, minor: false, proxy: proxy) }
                     }
                     if let onReachEnd { Color.clear.frame(height: 1).onAppear(perform: onReachEnd) }
                 }
                 .padding(.bottom, 12)
                 .animation(.default, value: columns)
             }
+            .onChange(of: timelineJump) { _, request in
+                guard let request, let section = sections.first(where: { $0.items.contains(where: { $0.id == request.photoID }) }) else { return }
+                guard let index = section.items.firstIndex(where: { $0.id == request.photoID }) else { return }
+                // The tile may not exist yet inside a large lazy month grid. Move to its
+                // proportional row within the section first, so SwiftUI materializes it.
+                let rows = max(1, (section.items.count + columns - 1) / columns)
+                let fraction = (Double(index / columns) + 0.5) / Double(rows)
+                proxy.scrollTo(section.id, anchor: UnitPoint(x: 0.5, y: fraction))
+            }
+            .scrollIndicators(usesTimelineScrubber ? .hidden : .automatic)
             .modifier(ScrollTracking(fraction: $scrollFraction, active: $scrolling))
             .overlay(alignment: .trailing) {
-                if showsScrubber && sections.count > 6 {
+                if usesTimelineScrubber {
                     TimelineScrubber(sections: sections, proxy: proxy, fraction: scrollFraction, scrolling: scrolling)
                 }
             }
+        }
+        .task(id: handledJump) {
+            guard let requestID = handledJump else { return }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            guard highlightedJump == requestID else { return }
+            withAnimation(.easeOut(duration: 0.3)) { highlightedJump = nil }
         }
         .simultaneousGesture(MagnifyGesture().onEnded { value in
             if value.magnification > 1.25 { storedColumns = max(2, storedColumns - 1) }
@@ -92,16 +117,29 @@ struct PhotoGrid<Header: View>: View {
                 .zoomTransition(sourceID: request.id, in: zoomNamespace)
         }
     }
-    private func sectionView(_ section: GridSection, minor: Bool) -> some View {
+    private func sectionView(_ section: GridSection, minor: Bool, proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if let title = section.title { sectionHeader(title, section, minor: minor) }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: columns), spacing: 2) {
                 ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
                     tile(item, in: section)
+                        .id(item.id)
+                        .overlay { if timelineJump?.photoID == item.id, let highlightedJump, timelineJump?.id == highlightedJump { Rectangle().stroke(Color.accentColor, lineWidth: 3).transition(.opacity).allowsHitTesting(false) } }
                         .onAppear { prefetch(after: index, in: section) }
+                        .task(id: timelineJump?.id) {
+                            guard let request = timelineJump, request.photoID == item.id,
+                                  handledJump != request.id else { return }
+                            // This task runs only once the requested tile is materialized.
+                            await Task.yield()
+                            guard !Task.isCancelled, timelineJump?.id == request.id else { return }
+                            proxy.scrollTo(item.id, anchor: .center)
+                            highlightedJump = request.id
+                            handledJump = request.id
+                        }
                 }
             }
         }.id(section.id)
+
     }
     /// Warms the next two rows so fast scrolling shows fewer empty tiles.
     private func prefetch(after index: Int, in section: GridSection) {

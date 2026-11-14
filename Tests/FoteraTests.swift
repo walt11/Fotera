@@ -1,4 +1,6 @@
 import XCTest
+import UIKit
+import ZIPFoundation
 @testable import Fotera
 
 /// Unit tests for logic that doesn't need a NAS. NAS round trips stay in the DEBUG `--fotera-verify` harness.
@@ -9,6 +11,118 @@ final class FoteraTests: XCTestCase {
         item.filesize = size
         if let duration { item.additional = .init(thumbnail: nil, gps: nil, video_meta: .init(duration: duration)) }
         return item
+    }
+
+    func testLiveDuplicateCheckAcceptsPlainStillAndRejectsCorruptArchive() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".zip")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).jpegData(withCompressionQuality: 0.8) { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        try image.write(to: file)
+        let stillHashes = try await TransferQueue.originalDigests(file, live: true)
+        XCTAssertEqual(stillHashes, [try TransferQueue.digest(file).0])
+        try Data("not an image or a complete ZIP".utf8).write(to: file)
+        do { _ = try await TransferQueue.originalDigests(file, live: true); XCTFail("Corrupt payload must not be accepted") } catch {}
+    }
+    func testLiveDuplicateCheckHashesEveryArchiveResource() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let still = directory.appendingPathComponent("still.heic"), motion = directory.appendingPathComponent("motion.mov")
+        try Data("still content".utf8).write(to: still); try Data("motion content".utf8).write(to: motion)
+        let zip = directory.appendingPathComponent("live.zip")
+        let archive = try Archive(url: zip, accessMode: .create)
+        try archive.addEntry(with: still.lastPathComponent, relativeTo: directory)
+        try archive.addEntry(with: motion.lastPathComponent, relativeTo: directory)
+        let hashes = try await TransferQueue.originalDigests(zip, live: true)
+        XCTAssertTrue(hashes.contains(try TransferQueue.digest(still).0))
+        XCTAssertTrue(hashes.contains(try TransferQueue.digest(motion).0))
+        XCTAssertFalse(hashes.contains("different content"))
+    }
+
+    func testHEICPreviewEligibility() {
+        XCTAssertTrue(ImagePipeline.isHEIC(photo(1, "IMPORTED.HEIC", size: nil)))
+        XCTAssertTrue(ImagePipeline.isHEIC(photo(2, "photo.heif")))
+        XCTAssertFalse(ImagePipeline.isHEIC(photo(3, "video.heic", type: "video")))
+        XCTAssertFalse(ImagePipeline.isHEIC(photo(4, "photo.dng")))
+    }
+
+    func testLoginNegotiationUsesOnlySupportedVersions() {
+        XCTAssertEqual(DSMClient.loginVersion(APIInfo(path: "entry.cgi", minVersion: 1, maxVersion: 7)), 7)
+        XCTAssertEqual(DSMClient.loginVersion(APIInfo(path: "entry.cgi", minVersion: 1, maxVersion: 6)), 6)
+        XCTAssertNil(DSMClient.loginVersion(APIInfo(path: "entry.cgi", minVersion: 8, maxVersion: 9)))
+        XCTAssertNil(DSMClient.loginVersion(APIInfo(path: "entry.cgi", minVersion: 1, maxVersion: 5)))
+    }
+
+    func testLoginChallengeIsScopedAndExpires() {
+        let now = Date()
+        let challenge = LoginChallenge(username: "first", password: "original", token: "challenge", created: now)
+        XCTAssertEqual(challenge.continuation(username: "first", password: "original", otp: "123456", now: now), "challenge")
+        XCTAssertNil(challenge.continuation(username: "second", password: "original", otp: "123456", now: now))
+        XCTAssertNil(challenge.continuation(username: "first", password: "changed", otp: "123456", now: now))
+        XCTAssertNil(challenge.continuation(username: "first", password: "original", otp: "", now: now))
+        XCTAssertNil(challenge.continuation(username: "first", password: "original", otp: "123456", now: now.addingTimeInterval(300)))
+    }
+    func testAuthenticationChallengeDecodingPreservesOtherAPIErrors() throws {
+        let challenge = try JSONDecoder().decode(APIError.self, from: Data(#"{"code":403,"errors":{"token":"temporary-challenge","types":[{"type":"otp"}]}}"#.utf8))
+        XCTAssertEqual(challenge.errors?.token, "temporary-challenge")
+        let other = try JSONDecoder().decode(APIError.self, from: Data(#"{"code":105,"errors":[{"code":1}]}"#.utf8))
+        XCTAssertEqual(other.code, 105)
+        XCTAssertNil(other.errors)
+    }
+
+    func testRecentRefreshMergesNewItemsAndUpdatedMetadata() {
+        let known = [photo(3), photo(2), photo(1)]
+        let updated = photo(3, "updated.heic")
+        let merged = LibraryStore.mergeRecent(known: known, page: [photo(4), updated, photo(2)], total: 4)
+        XCTAssertEqual(merged?.map(\.id), [4, 3, 2, 1])
+        XCTAssertEqual(merged?[1].filename, "updated.heic")
+        XCTAssertEqual(LibraryStore.mergeRecent(known: known, page: [photo(3), photo(2)], total: 3), known)
+    }
+    func testRecentRefreshRequiresReconciliationForAmbiguousChanges() {
+        let known = [photo(3), photo(2), photo(1)]
+        XCTAssertNil(LibraryStore.mergeRecent(known: known, page: [photo(3), photo(2)], total: 4)) // older import
+        XCTAssertNil(LibraryStore.mergeRecent(known: known, page: [photo(3), photo(2)], total: 2)) // deletion
+        XCTAssertNil(LibraryStore.mergeRecent(known: known, page: [photo(4), photo(3)], total: 3)) // replacement
+        XCTAssertNil(LibraryStore.mergeRecent(known: known, page: [photo(5), photo(4)], total: 5)) // no overlap
+        XCTAssertNil(LibraryStore.mergeRecent(known: known, page: [photo(3), photo(3)], total: 3))
+    }
+    func testMemoryCoverRetainsStillForOriginalFallback() {
+        let still = photo(2, "missing-preview.heic")
+        let memory = Memory(id: "test", title: "Test", items: [photo(1, type: "video"), still])
+        XCTAssertEqual(memory.cover?.id, still.id)
+        XCTAssertNil(memory.cover?.thumbnailSource)
+    }
+
+    private func locatedPhoto(_ id: Int, latitude: Double, longitude: Double) -> RemotePhoto {
+        var item = photo(id)
+        item.additional = .init(thumbnail: nil, gps: .init(latitude: latitude, longitude: longitude), video_meta: nil)
+        return item
+    }
+    func testLargePhotoMapHasBoundedMarkersAndRetainsEveryItem() throws {
+        let photos = (0..<100_000).map { locatedPhoto($0, latitude: Double($0 % 160) - 80,
+                                                    longitude: Double(($0 * 17) % 360) - 180) }
+        let clusters = try PhotoMapClustering.build(photos, viewport: .world)
+        XCTAssertLessThanOrEqual(clusters.count, 64)
+        XCTAssertEqual(clusters.reduce(0) { $0 + $1.items.count }, photos.count)
+        XCTAssertEqual(Set(clusters.flatMap(\.items).map(\.id)).count, photos.count)
+    }
+    func testMapFiltersViewportAndHandlesDateLineAndInvalidGPS() throws {
+        let items = [locatedPhoto(1, latitude: 1, longitude: 179), locatedPhoto(2, latitude: 1, longitude: -179),
+                     locatedPhoto(3, latitude: 0, longitude: 0), locatedPhoto(4, latitude: .nan, longitude: 0),
+                     locatedPhoto(5, latitude: 91, longitude: 0)]
+        let clusters = try PhotoMapClustering.build(items, viewport: .init(latitude: 0, longitude: 180, latitudeSpan: 20, longitudeSpan: 20))
+        XCTAssertEqual(Set(clusters.flatMap(\.items).map(\.id)), [1, 2])
+        XCTAssertTrue(clusters.allSatisfy { abs($0.longitude) > 170 })
+    }
+    func testMapClusteringHonorsCancellation() async {
+        let task = Task { () throws -> [PhotoMapCluster] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try PhotoMapClustering.build([], viewport: .world)
+        }
+        do { _ = try await task.value; XCTFail("Cancelled clustering must not publish results") }
+        catch { XCTAssertTrue(error is CancellationError) }
     }
 
     // MARK: Time
@@ -121,6 +235,61 @@ final class FoteraTests: XCTestCase {
         XCTAssertTrue(decoded.verify)
         XCTAssertTrue(decoded.verifyVideos)
         XCTAssertFalse(decoded.organizeByMonth)
+    }
+
+    func testLegacyConnectionProfileAndRemoteURLValidation() throws {
+        let old = try JSONDecoder().decode(RouteProfile.self, from: Data(#"{"lan":"http://192.168.1.2:5000","quickConnect":"testnas","enabled":true,"identity":"test"}"#.utf8))
+        XCTAssertNil(old.remoteURL)
+        XCTAssertEqual(old.quickConnect, "testnas")
+        XCTAssertEqual(try RouteProfile.remoteAddress(" https://nas.example.com:5001/ ")?.absoluteString, "https://nas.example.com:5001")
+        XCTAssertThrowsError(try RouteProfile.remoteAddress("http://nas.example.com"))
+        XCTAssertThrowsError(try RouteProfile.remoteAddress("https://user:pass@nas.example.com"))
+        XCTAssertNil(try RouteProfile.remoteAddress(""))
+    }
+    func testConnectionPreferenceAndProfileRoundTrip() throws {
+        let profile = RouteProfile(lan: "http://192.168.1.2:5000", quickConnect: "testnas", remoteURL: "https://nas.example.com:5001", enabled: true, identity: "test")
+        let restored = try JSONDecoder().decode(RouteProfile.self, from: JSONEncoder().encode(profile))
+        let current = try DSMClient.normalize(profile.lan)
+        XCTAssertEqual(restored.directCandidates(current: current, canonical: "https://nas.example.com:5001").map(\.absoluteString),
+                       ["http://192.168.1.2:5000", "https://nas.example.com:5001"])
+    }
+
+    func testRouteFailoverAndIdentityProtection() async throws {
+        let profile = RouteProfile(lan: "http://192.168.1.2:5000", remoteURL: "https://nas.example.com", enabled: true, identity: "expected-nas")
+        let local = try DSMClient.normalize(profile.lan)
+        let remote = try XCTUnwrap(RouteProfile.remoteAddress(profile.remoteURL!))
+        let home = await profile.verifiedDirectRoute(current: remote, canonical: remote.absoluteString) { _ in "expected-nas" }
+        XCTAssertEqual(home, local)
+        let away = await profile.verifiedDirectRoute(current: local, canonical: local.absoluteString) { url in
+            if url.scheme == "http" { throw URLError(.cannotConnectToHost) }
+            return "expected-nas"
+        }
+        XCTAssertEqual(away, remote)
+        let wrong = await profile.verifiedDirectRoute(current: local, canonical: local.absoluteString) { _ in "different-nas" }
+        XCTAssertNil(wrong)
+    }
+
+    func testRouteFailureDetectionDoesNotRetryCancellationOrTLSFailures() {
+        XCTAssertTrue(DSMClient.isRouteFailure(URLError(.networkConnectionLost)))
+        XCTAssertTrue(DSMClient.isRouteFailure(URLError(.cannotConnectToHost)))
+        XCTAssertFalse(DSMClient.isRouteFailure(URLError(.cancelled)))
+        XCTAssertFalse(DSMClient.isRouteFailure(URLError(.serverCertificateUntrusted)))
+        XCTAssertFalse(DSMClient.isRouteFailure(AuthError.permissionDenied))
+    }
+
+    func testCellularSelectionNeverProbesSavedLANOrigins() async throws {
+        let profile = RouteProfile(lan: "http://192.168.1.2:5000", remoteURL: "https://nas.example.com", enabled: true, identity: "nas")
+        let local = try DSMClient.normalize(profile.lan)
+        XCTAssertEqual(profile.directCandidates(current: local, canonical: profile.lan, allowLAN: false).map(\.absoluteString), ["https://nas.example.com"])
+        let route = await profile.verifiedDirectRoute(current: local, canonical: profile.lan, allowLAN: false) { url in
+            guard url.host == "nas.example.com" else { throw URLError(.timedOut) }
+            return "nas"
+        }
+        XCTAssertEqual(route?.host, "nas.example.com")
+    }
+    func testRouteChangeComparesPortsAndSchemes() throws {
+        XCTAssertTrue(DSMClient.sameOrigin(URL(string: "https://nas.example.com/webapi/entry.cgi")!, URL(string: "https://nas.example.com")!))
+        XCTAssertFalse(DSMClient.sameOrigin(URL(string: "http://192.168.1.2:5000")!, URL(string: "https://192.168.1.2:5001")!))
     }
 
     // MARK: Connections

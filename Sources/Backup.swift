@@ -69,6 +69,7 @@ struct BackupPreferences: Codable {
     private var cachedTotal: (key: String, total: Int, at: Date)?
     private var cachedBaseline: (url: URL, ids: Set<String>)?
     private var runTask: Task<Void, Never>?
+    private var runScheduled = false
     private var retryTask: Task<Void, Never>?
     private var queueObservation: AnyCancellable?
     private var lastWidgetUpdate = Date.distantPast
@@ -96,6 +97,10 @@ struct BackupPreferences: Codable {
         if self.client === client && self.account == account { return }
         pause()
         self.client = client; self.account = account
+        if let path, path.status == .satisfied {
+            let local = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            Task { await client.refreshConnectionRoute(allowLAN: local) }
+        }
         preferences = UserDefaults.standard.data(forKey: settingsKey).flatMap { try? JSONDecoder().decode(BackupPreferences.self, from: $0) } ?? BackupPreferences()
         lastCompleted = UserDefaults.standard.object(forKey: settingsKey + ".completed") as? Date
         queue = TransferQueue.shared(account: account + "|backup")
@@ -189,7 +194,10 @@ struct BackupPreferences: Codable {
 
     private func networkChanged(_ path: NWPath) {
         self.path = path
-        if path.status == .satisfied, let client { Task { await client.refreshConnectionRoute() } }
+        if path.status == .satisfied, let client {
+            let local = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            Task { await client.refreshConnectionRoute(allowLAN: local) }
+        }
         networkWaiters.forEach { $0.resume() }; networkWaiters.removeAll()
         if !conditionsMet(update: false) { if running { status = blockedReason() ?? status } }
         else if UIApplication.shared.applicationState == .active { start() }
@@ -221,8 +229,13 @@ struct BackupPreferences: Codable {
     func start(userInitiated: Bool = false) {
         guard preferences.enabled, client != nil else { return }
         if userInitiated { BackupScheduler.requestContinuedBackup() }
-        guard !running else { return }
-        runTask = Task { await run(deadline: nil, background: false) }
+        guard !running, !runScheduled else { return }
+        runScheduled = true
+        runTask = Task {
+            defer { runScheduled = false }
+            guard !Task.isCancelled else { return }
+            await run(deadline: nil, background: false)
+        }
     }
     func pause() {
         BackupScheduler.cancelContinuedBackup()
@@ -233,7 +246,7 @@ struct BackupPreferences: Codable {
     func waitUntilIdle() async { await runTask?.value }
     /// Runs one bounded pass, including verification, so background completions advance the ledger.
     func run(deadline: Date?, background: Bool, trigger: String? = nil) async {
-        guard preferences.enabled, !running, let client, let queue, let destination = preferences.destination else { return }
+        guard !Task.isCancelled, preferences.enabled, !running, let client, let queue, let destination = preferences.destination else { return }
         guard conditionsMet() else { return }
         running = true
         cachedTotal = nil
@@ -272,8 +285,15 @@ struct BackupPreferences: Codable {
                 let healthy = await queue.process(client: client, wifiOnly: settings.wifiOnly, verify: settings.verify,
                                                   verifyVideos: settings.verifyVideos, deadline: deadline, maxInFlight: background ? 12 : 4, verifyAllowed: true)
                 updateCounts()
-                if !healthy { status = "Some uploads couldn’t start. Will retry."; return }
-                if batch == 0 && (!queue.pending.isEmpty || cursor >= fetch.count) { break }
+                if !healthy || (batch == 0 && !queue.pending.isEmpty) {
+                    status = healthy ? "Waiting to retry pending uploads or verification" : "Some uploads couldn’t start. Retrying shortly."
+                    // Keep the owning task alive across backoff. Ending it also ends an iOS
+                    // continued-processing grant; the former foreground-only timer never resumed it.
+                    guard deadline == nil else { break }
+                    try await Task.sleep(for: .seconds(30))
+                    continue
+                }
+                if batch == 0 && cursor >= fetch.count { break }
             }
             guard !Task.isCancelled else { status = "Paused"; return }
             if queue.pending.isEmpty && cursor >= fetch.count {

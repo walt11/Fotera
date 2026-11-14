@@ -6,7 +6,15 @@ import WidgetKit
     @StateObject private var app = AppModel()
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--memory-navigation-test") {
+                MemoryNavigationPreview().environmentObject(app)
+            } else if ProcessInfo.processInfo.arguments.contains("--map-stress-test") {
+                MapStressPreview().environmentObject(app)
+            } else { RootView().environmentObject(app) }
+            #else
             RootView().environmentObject(app)
+            #endif
         }
     }
 }
@@ -16,6 +24,7 @@ import WidgetKit
     enum Phase { case launching, signedOut, signedIn }
     @Published private(set) var phase: Phase = .launching
     @Published private(set) var client: DSMClient?
+    @Published private(set) var activeConnection = ""
     @Published private(set) var shared = false
     @Published var notice: String?
     @Published private(set) var staysSignedIn = false
@@ -29,13 +38,24 @@ import WidgetKit
     @AppStorage("serverAddress") var address = ""
     @AppStorage("accountName") var username = ""
     private var observer: NSObjectProtocol?
+    private var routeObserver: NSObjectProtocol?
+    private var routeMonitorTask: Task<Void, Never>?
     private var backgroundWorker: Task<Void, Never>?
+    // Keep the password/OTP exchange on the same client; never share it across accounts.
+    private var pendingLogin: (address: String, username: String, password: String, client: DSMClient)?
 
     var account: String { address + "|" + username }
     var manualUploads: TransferQueue { TransferQueue.shared(account: account) }
 
     init() {
         ShareInbox.migrateSettings()
+        routeObserver = NotificationCenter.default.addObserver(forName: .foteraRouteChanged, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, let source = note.object as? DSMClient, self.client === source,
+                      let url = note.userInfo?["url"] as? String else { return }
+                self.activeConnection = url
+            }
+        }
         observer = NotificationCenter.default.addObserver(forName: .foteraSessionExpired, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sessionExpired() }
         }
@@ -61,8 +81,25 @@ import WidgetKit
         #endif
     }
     func signIn(address: String, username: String, password: String, otp: String, remember: Bool) async throws {
-        let connection = try await DSMClient.open(address: address)
-        try await connection.signIn(username: username, password: password, otp: otp, remember: remember)
+        let connection: DSMClient
+        if let pendingLogin, pendingLogin.address == address, pendingLogin.username == username,
+           pendingLogin.password == password, !otp.isEmpty {
+            connection = pendingLogin.client
+        } else {
+            pendingLogin = nil
+            connection = try await DSMClient.open(address: address)
+        }
+        do {
+            try await connection.signIn(username: username, password: password, otp: otp, remember: remember)
+            pendingLogin = nil
+        } catch {
+            if case AuthError.otpRequired = error {
+                pendingLogin = (address, username, password, connection)
+            } else if case AuthError.otpInvalid = error {
+                pendingLogin = (address, username, password, connection)
+            } else { pendingLogin = nil }
+            throw error
+        }
         self.address = connection.address; self.username = username
         staysSignedIn = remember
         notice = nil; addingAccount = nil
@@ -87,6 +124,7 @@ import WidgetKit
         phase = .signedOut
     }
     func cancelAddingAccount() async {
+        pendingLogin = nil
         guard let previous = addingAccount else { return }
         addingAccount = nil
         AccountVault.unpark(previous)
@@ -109,6 +147,8 @@ import WidgetKit
     }
     /// Stops using the current client without signing it out on the NAS.
     private func deactivate() async {
+        routeMonitorTask?.cancel(); routeMonitorTask = nil; activeConnection = ""
+        pendingLogin = nil
         BackupController.shared.detach()
         TransferQueue.flushAll()
         ImagePipeline.shared.configure(client: nil, account: "")
@@ -117,6 +157,8 @@ import WidgetKit
     }
     private func activate(_ connection: DSMClient) async {
         client = connection
+        activeConnection = await connection.base.absoluteString
+        startRouteMonitoring()
         // Backup's duplicate check reuses the timeline index instead of listing the NAS again.
         TransferQueue.catalogSource = { [weak library] shared in
             guard let library, library.shared == shared, library.lastSynced != nil else { return nil }
@@ -133,6 +175,7 @@ import WidgetKit
         Task { await library.attach(client: client, account: account, shared: value) }
     }
     func signOut() async {
+        routeMonitorTask?.cancel(); routeMonitorTask = nil; activeConnection = ""
         let connection = client
         AccountStore.remove(AccountRef(address: address, username: username))
         reauthRequired = false
@@ -168,11 +211,46 @@ import WidgetKit
     }
     func becameActive() {
         guard let client else { return }
+        startRouteMonitoring()
         library.refreshIfStale()
-        BackupController.shared.start()
+        // A bounded suspension pass may still own the backup when the user returns.
+        // Wait for it to release ownership before starting the foreground run.
+        let previous = backgroundWorker
+        previous?.cancel(); backgroundWorker = nil
+        Task {
+            await previous?.value
+            guard UIApplication.shared.applicationState == .active, self.client === client else { return }
+            BackupController.shared.start()
+        }
         Task { await importShared() }
         if !manualUploads.pending.isEmpty { manualUploads.start(client: client, wifiOnly: false) }
     }
+    /// Network callbacks handle interface changes; periodic foreground checks also catch
+    /// switching Wi-Fi networks when the system keeps the same preferred interface.
+    private func startRouteMonitoring() {
+        routeMonitorTask?.cancel()
+        guard UIApplication.shared.applicationState == .active, let connection = client else { return }
+        routeMonitorTask = Task { [weak self] in
+            var first = true
+            while !Task.isCancelled {
+                guard self?.client === connection else { return }
+                // Re-check right away on returning to the app, then at most once a minute.
+                // Network changes still trigger an immediate check through the path monitor.
+                if first { await connection.refreshConnectionRoute() } else { await connection.checkRouteIfStale() }
+                first = false
+                let route = await connection.base.absoluteString
+                guard !Task.isCancelled, self?.client === connection else { return }
+                self?.activeConnection = route
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            }
+        }
+    }
+    var activeConnectionLabel: String {
+        guard let url = URL(string: activeConnection), let host = url.host else { return "Checking connection…" }
+        let kind = ConnectionAddress.isLAN(host) ? "LAN" : "Remote"
+        return "\(kind) · \(activeConnection)"
+    }
+
     private var importingShared = false
     /// Queues files shared from other apps ("Upload to Fotera") into Upload to NAS.
     func importShared() async {
@@ -197,6 +275,7 @@ import WidgetKit
     }
     /// Before suspension, hand queued uploads to iOS so they continue in the background.
     func enteredBackground() {
+        routeMonitorTask?.cancel(); routeMonitorTask = nil
         TransferQueue.flushAll()
         // Lock before iOS takes the app-switcher snapshot.
         if UserDefaults.standard.bool(forKey: "appLock") { locked = true }
@@ -412,6 +491,8 @@ struct PhotosTab: View {
     @State private var showingSettings = false
     @State private var showingBackup = false
     @State private var memory: Memory?
+    @State private var pendingTimelinePhoto: Int?
+    @State private var timelineJump: TimelineJump?
     var body: some View {
         NavigationStack {
             content
@@ -454,11 +535,16 @@ struct PhotosTab: View {
                 .refreshable { await library.refreshAndWait() }
                 .sheet(isPresented: $showingSettings) { SettingsView() }
                 .sheet(isPresented: $showingBackup) { NavigationStack { BackupView(backup: backup).toolbar { Button("Done") { showingBackup = false } } } }
-                .fullScreenCover(item: $memory) { memory in
+                .fullScreenCover(item: $memory, onDismiss: {
+                    if let id = pendingTimelinePhoto {
+                        pendingTimelinePhoto = nil
+                        timelineJump = TimelineJump(photoID: id)
+                    }
+                }) { memory in
                     if memory.id == "debug" {
                         MediaViewer(items: memory.items, startID: memory.items.first?.id ?? 0, shared: app.shared)
                     } else {
-                        MemoryStoryView(memory: memory, shared: app.shared)
+                        MemoryStoryView(memory: memory, shared: app.shared) { pendingTimelinePhoto = $0 }
                     }
                 }
                 .onAppear {
@@ -493,7 +579,7 @@ struct PhotosTab: View {
                     description: Text(app.shared ? "Shared Space is empty." : "Turn on backup or upload photos to see them here."))
             }
         } else {
-            PhotoGrid(sections: library.gridSections, shared: app.shared, selection: $selection, showsScrubber: true) {
+            PhotoGrid(sections: library.gridSections, shared: app.shared, selection: $selection, showsScrubber: true, timelineJump: timelineJump) {
                 VStack(alignment: .leading, spacing: 8) {
                     if let notice = app.notice ?? library.failure.map({ "Couldn’t refresh: " + $0 }) {
                         Label(notice, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 12)
@@ -511,7 +597,7 @@ struct PhotosTab: View {
             HStack(spacing: 10) {
                 ForEach(library.memories) { memory in
                     Button { self.memory = memory } label: {
-                        ThumbnailView(source: memory.items.first(where: { !$0.isVideo })?.thumbnailSource ?? memory.items.first?.thumbnailSource, shared: app.shared, size: .m)
+                        ThumbnailView(source: memory.cover?.thumbnailSource, shared: app.shared, size: .m, fallbackPhoto: memory.cover)
                             .frame(width: 132, height: 176)
                             .overlay(LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom))
                             .overlay(alignment: .bottomLeading) {
