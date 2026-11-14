@@ -524,6 +524,8 @@ struct PhotosTab: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var backup: BackupController
     @AppStorage("timelineGrouping") private var grouping = TimelineGrouping.day.rawValue
+    /// "timeline" or "folders": browse by date, or by the NAS folder structure.
+    @AppStorage("photosViewMode") private var viewMode = "timeline"
     @State private var selection: Set<Int>?
     @State private var showingSettings = false
     @State private var showingBackup = false
@@ -548,13 +550,19 @@ struct PhotosTab: View {
                                     Label("Personal Space", systemImage: "person").tag(false)
                                     Label("Shared Space", systemImage: "person.2").tag(true)
                                 }
-                                Picker("Group by", selection: $grouping) {
-                                    ForEach(TimelineGrouping.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                                Picker("View", selection: $viewMode) {
+                                    Label("Timeline", systemImage: "calendar").tag("timeline")
+                                    Label("Folders", systemImage: "folder").tag("folders")
                                 }
-                                Button("Select", systemImage: "checkmark.circle") { selection = [] }
+                                if viewMode != "folders" {
+                                    Picker("Group by", selection: $grouping) {
+                                        ForEach(TimelineGrouping.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                                    }
+                                    Button("Select", systemImage: "checkmark.circle") { selection = [] }
+                                }
                             } label: {
                                 HStack(spacing: 4) {
-                                    FoteraBrand(page: app.shared ? "Shared photos" : "Photos")
+                                    FoteraBrand(page: viewMode == "folders" ? (app.shared ? "Shared folders" : "Folders") : (app.shared ? "Shared photos" : "Photos"))
                                     Image(systemName: "chevron.down").font(.caption.weight(.bold))
                                 }
                                 .foregroundStyle(.primary)
@@ -603,7 +611,10 @@ struct PhotosTab: View {
         }
     }
     @ViewBuilder private var content: some View {
-        if library.photos.isEmpty {
+        if viewMode == "folders" {
+            // Rebuilt per account and space so it lists that space's folders.
+            FolderView(folder: nil, embedded: true).id(app.account + (app.shared ? "|shared" : "|personal"))
+        } else if library.photos.isEmpty {
             if library.syncing || library.loadingPhone {
                 SkeletonGrid().overlay(alignment: .bottom) {
                     if let progress = library.progress { Text(progress).font(.footnote).card(padding: 10).padding(.bottom, 24) }

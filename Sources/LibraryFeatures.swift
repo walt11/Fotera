@@ -370,9 +370,10 @@ struct RecycleBinView: View {
             }
             Section {
                 ForEach(files) { file in
-                    HStack {
+                    HStack(spacing: 12) {
+                        RecyclePreview(path: file.path)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(file.name)
+                            Text(file.name).lineLimit(1)
                             Text(folder(of: file)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -419,6 +420,59 @@ struct RecycleBinView: View {
         restoring = nil; loading = true; defer { loading = false }
         do { try await client.restoreRecycledFile(file); app.library.refresh(); files.removeAll { $0.path == file.path } }
         catch { failure = "Restore could not be confirmed: " + error.localizedDescription }
+    }
+}
+/// A small preview of a recycled file, cached for the session.
+struct RecyclePreview: View {
+    let path: String
+    @EnvironmentObject private var app: AppModel
+    @State private var image: UIImage?
+    @State private var failed = false
+    @MainActor private static let cache = NSCache<NSString, UIImage>()
+    @MainActor private static let limiter = RequestLimiter(limit: 3)
+    private var isVideo: Bool { ["mov", "mp4", "m4v", "avi", "mkv", "3gp"].contains((path as NSString).pathExtension.lowercased()) }
+    var body: some View {
+        ZStack {
+            Color(.secondarySystemFill)
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else if failed { Image(systemName: isVideo ? "film" : "photo").foregroundStyle(.secondary) }
+            else { ProgressView().controlSize(.small) }
+            if isVideo && image != nil {
+                Image(systemName: "play.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                    .shadow(radius: 2).padding(3).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+        }
+        .frame(width: 56, height: 56)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityHidden(true)
+        .task(id: path) {
+            if let hit = Self.cache.object(forKey: path as NSString) { image = hit; return }
+            guard let client = app.client else { failed = true; return }
+            do { try await Self.limiter.acquire() } catch { return }   // Scrolled away.
+            defer { Self.limiter.release() }
+            do {
+                if isVideo {
+                    // File Station has no video thumbnails here; read the first frame from the file itself.
+                    let url = try await client.recycleStreamURL(path: path)
+                    let ext = (path as NSString).pathExtension.lowercased()
+                    let asset = AVURLAsset(url: url, options: [AVURLAssetOverrideMIMETypeKey: ext == "mov" ? "video/quicktime" : "video/mp4"])
+                    let generator = AVAssetImageGenerator(asset: asset)
+                    generator.appliesPreferredTrackTransform = true
+                    generator.maximumSize = CGSize(width: 168, height: 168)
+                    let frame = try await withTimeout(10) { try await generator.image(at: .zero).image }
+                    let decoded = UIImage(cgImage: frame)
+                    Self.cache.setObject(decoded, forKey: path as NSString)
+                    image = decoded; return
+                }
+                let data = try await client.recyclePreview(path: path)
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("Recycle-" + UUID().uuidString)
+                try data.write(to: file)
+                defer { try? FileManager.default.removeItem(at: file) }
+                guard let decoded = await ImagePipeline.decode(file: file, maxPixels: 168) else { failed = true; return }
+                Self.cache.setObject(decoded, forKey: path as NSString)
+                image = decoded
+            } catch { failed = true }
+        }
     }
 }
 struct SharedWithMeView: View {

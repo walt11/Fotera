@@ -431,6 +431,8 @@ struct LocalCollectionScreen: View {
 
 struct FolderView: View {
     let folder: RemoteFolder?
+    /// Shown inside the Photos tab, which supplies its own title.
+    var embedded = false
     @EnvironmentObject private var app: AppModel
     @State private var folders: [RemoteFolder] = []
     @State private var failure: String?
@@ -439,16 +441,19 @@ struct FolderView: View {
             if let folder {
                 CollectionScreen(title: folder.displayName, source: .filter(.folder(folder.id))) { subfolders }
             } else {
-                ScrollView { subfolders }.navigationTitle("Folders").navigationBarTitleDisplayMode(.inline)
+                if embedded { ScrollView { subfolders }.refreshable { await reload() } }
+                else { ScrollView { subfolders }.navigationTitle("Folders").navigationBarTitleDisplayMode(.inline) }
             }
         }
-        .task {
-            guard let client = app.client, folders.isEmpty else { return }
-            do {
-                folders = try await client.folders(shared: app.shared, parent: folder?.id ?? 0, offset: 0)
-                    .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-            } catch { failure = error.localizedDescription }
-        }
+        .task { if folders.isEmpty { await reload() } }
+    }
+    private func reload() async {
+        guard let client = app.client else { return }
+        do {
+            folders = try await client.folders(shared: app.shared, parent: folder?.id ?? 0, offset: 0)
+                .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+            failure = nil
+        } catch { failure = error.localizedDescription }
     }
     @ViewBuilder private var subfolders: some View {
         if !folders.isEmpty || failure != nil {

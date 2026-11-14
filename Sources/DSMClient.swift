@@ -1098,6 +1098,42 @@ extension DSMClient {
             result += page.list; offset += page.list.count; if page.list.count < 100 { return result }
         }
     }
+    /// A preview of a file in the recycle bin. File Station renders it; when it can't (some HEIC and video
+    /// files), a still image is downloaded instead so the caller can scale it down. Read-only.
+    func recyclePreview(path: String) async throws -> Data {
+        guard path.hasPrefix("/home/#recycle/") || path.hasPrefix("/photo/#recycle/"), !path.split(separator: "/").contains("..") else { throw ConnectionError.invalidAddress }
+        return try await authorized { sid in
+            func checked(_ data: Data) throws -> Data {
+                if data.isEmpty || data.first == UInt8(ascii: "{") {
+                    throw ConnectionError.server((try? JSONDecoder().decode(Envelope<EmptyPayload>.self, from: data))?.error?.code ?? -1)
+                }
+                return data
+            }
+            if let info = try? self.info("SYNO.FileStation.Thumb", 2),
+               let data = try? checked(try await self.send(info.path, ["api": "SYNO.FileStation.Thumb", "version": "2", "method": "get",
+                                                                        "path": path, "size": "small", "rotate": "1", "_sid": sid])) {
+                return data
+            }
+            let still = ["heic", "heif", "jpg", "jpeg", "png", "gif", "tif", "tiff", "webp", "dng"]
+            guard still.contains((path as NSString).pathExtension.lowercased()) else { throw ConnectionError.unavailable }
+            let info = try self.info("SYNO.FileStation.Download", 2)
+            return try checked(try await self.send(info.path, ["api": "SYNO.FileStation.Download", "version": "2", "method": "download",
+                                                              "path": try Self.json([path]), "mode": "download", "_sid": sid]))
+        }
+    }
+    /// A GET URL for a recycled video, so AVFoundation can read just its first frame with range requests.
+    func recycleStreamURL(path: String) async throws -> URL {
+        guard path.hasPrefix("/home/#recycle/") || path.hasPrefix("/photo/#recycle/"), !path.split(separator: "/").contains("..") else { throw ConnectionError.invalidAddress }
+        return try await authorized { sid in
+            let info = try self.info("SYNO.FileStation.Download", 2)
+            var components = URLComponents(url: self.base.appendingPathComponent("webapi").appendingPathComponent(info.path), resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "api", value: "SYNO.FileStation.Download"), URLQueryItem(name: "version", value: "2"),
+                                     URLQueryItem(name: "method", value: "download"), URLQueryItem(name: "path", value: try Self.json([path])),
+                                     URLQueryItem(name: "mode", value: "open"), URLQueryItem(name: "_sid", value: sid)]
+            guard let url = components.url else { throw ConnectionError.invalidResponse }
+            return url
+        }
+    }
     func recycleFiles(path: String) async throws -> [RecycleFile] {
         guard path == "/home/#recycle" || path.hasPrefix("/home/#recycle/") || path == "/photo/#recycle" || path.hasPrefix("/photo/#recycle/"), !path.split(separator: "/").contains("..") else { throw ConnectionError.invalidAddress }
         struct Page: Decodable { let files: [RecycleFile] }

@@ -2,6 +2,7 @@
 import Foundation
 import UIKit
 import ImageIO
+import AVFoundation
 import Photos
 
 /// Opt-in development checks (launch with `--fotera-verify`). Never reads credentials into a report.
@@ -252,6 +253,30 @@ import Photos
                 }
                 await walk("/home/#recycle", depth: 0)
                 await walk("/photo/#recycle", depth: 0)
+                var pending = ["/home/#recycle/Photos"]; var checked = 0
+                while let next = pending.popLast(), checked < 20 {
+                    guard let entries = try? await client.recycleFiles(path: next) else { continue }
+                    pending += entries.filter(\.isdir).map(\.path)
+                    for file in entries where !file.isdir {
+                        checked += 1
+                        let t0 = Date()
+                        if ["mov", "mp4"].contains((file.name as NSString).pathExtension.lowercased()) {
+                            do {
+                                let asset = AVURLAsset(url: try await client.recycleStreamURL(path: file.path), options: [AVURLAssetOverrideMIMETypeKey: "video/quicktime"])
+                                let generator = AVAssetImageGenerator(asset: asset); generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 168, height: 168)
+                                let frame = try await withTimeout(10) { try await generator.image(at: .zero).image }
+                                record("preview \(file.name): video frame \(frame.width)x\(frame.height) in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                            } catch { record("preview \(file.name): VIDEO ERROR \(error.localizedDescription)") }
+                            continue
+                        }
+                        do {
+                            let data = try await client.recyclePreview(path: file.path)
+                            let url = FileManager.default.temporaryDirectory.appendingPathComponent("rp-" + UUID().uuidString); try data.write(to: url)
+                            let image = await ImagePipeline.decode(file: url, maxPixels: 168); try? FileManager.default.removeItem(at: url)
+                            record("preview \(file.name): \(data.count / 1024) KB, decoded \(image.map { "\(Int($0.size.width))x\(Int($0.size.height))" } ?? "NO") in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                        } catch { record("preview \(file.name): ERROR \(error.localizedDescription)") }
+                    }
+                }
                 record("ADMIN: " + String((try await client.featureContract("SYNO.Foto.Setting.Admin", method: "get")).prefix(1500)))
                 record("FINISHED"); return
             }
