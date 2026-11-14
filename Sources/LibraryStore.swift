@@ -36,6 +36,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     private(set) var client: DSMClient?
     private(set) var shared = false
     private var account = ""
+    private var widgetTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
     private var syncGeneration = UUID()
     private var buildGeneration = UUID()
@@ -49,6 +50,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     var cacheAccount: String { account + "|" + String(shared) }
 
     func attach(client: DSMClient?, account: String, shared: Bool) async {
+        widgetTask?.cancel(); widgetTask = nil
         syncGeneration = UUID()
         syncTask?.cancel(); syncTask = nil; syncing = false
         self.client = client; self.account = account; self.shared = shared
@@ -93,6 +95,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
                         lastSynced = Date()
                         if changed { try? await LibraryCache.shared.write(account: key, snapshot: .init(photos: merged, updated: Date())) }
                         await refreshFavorites(client: client, space: space, generation: generation)
+                        if !changed { refreshWidgetMemories() }
                         return
                     }
                 }
@@ -116,7 +119,6 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
                 if changed { try? await LibraryCache.shared.write(account: key, snapshot: .init(photos: indexed, updated: Date())) }
                 await refreshFavorites(client: client, space: space, generation: generation)
                 guard generation == syncGeneration, !Task.isCancelled else { return }
-                await WidgetMemories.refresh(memories: memories, photos: photos, shared: space)
                 await FeatureWidgets.refresh(client: client, account: account)
             } catch {
                 guard key == cacheAccount, generation == syncGeneration, !isCancelledRequest(error) else { return }
@@ -183,6 +185,15 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
             guard generation == buildGeneration else { return }
             sections = built.sections; gridSections = built.grid; memories = built.memories
             videos = built.videos; located = built.located; years = built.years; positions = built.positions
+            refreshWidgetMemories()
+        }
+    }
+    func refreshWidgetMemories() {
+        widgetTask?.cancel()
+        guard client != nil, !photos.isEmpty else { return }
+        let key = cacheAccount
+        widgetTask = Task {
+            await WidgetMemories.refresh(memories: memories, photos: photos, shared: shared, account: key)
         }
     }
     private struct Built: Sendable {
@@ -249,14 +260,14 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
 
 /// Keeps rotating widget memories fresh. Only small previews are shared with the widget.
 enum WidgetMemories {
-    @MainActor static func refresh(memories: [Memory], photos: [RemotePhoto], shared: Bool) async {
-        guard WidgetSnapshotStore.isAvailable, !shared, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
+    @MainActor static func refresh(memories: [Memory], photos: [RemotePhoto], shared: Bool, account: String) async {
+        guard WidgetSnapshotStore.isAvailable, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
         var local = Calendar(identifier: .gregorian)
         local.timeZone = .current
         let today = local.dateComponents([.year, .month, .day], from: Date())
         // Version the stamp so an existing adjacent-day widget selection is replaced.
-        let stamp = "exact-day-v2-\(today.year!)-\(today.month!)-\(today.day!)"
-        guard UserDefaults.standard.string(forKey: "widgetMemoriesStamp") != stamp else { return }
+        let stamp = "preview-v3-\(LibraryCache.hash(account))-\(today.year!)-\(today.month!)-\(today.day!)"
+        guard WidgetSnapshot.needsRefresh(stamp: stamp, savedStamp: UserDefaults.standard.string(forKey: "widgetMemoriesStamp"), snapshots: WidgetSnapshotStore.readMemories()) else { return }
         var picks: [(String, RemotePhoto)] = memories.flatMap { memory in memory.items.filter { !$0.isVideo }.prefix(2).map { (memory.title, $0) } }
         if picks.isEmpty {
             let stills = photos.filter { !$0.isVideo }
@@ -270,12 +281,11 @@ enum WidgetMemories {
             if let source = photo.thumbnailSource { preview = await ImagePipeline.shared.image(source, shared: shared, size: .xl) }
             if preview == nil { preview = await ImagePipeline.shared.originalPreview(photo, shared: shared, size: .xl) }
             guard let image = preview else { continue }
-            let scale = min(1, 800 / max(image.size.width, image.size.height))
-            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-            let data = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.8) { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+            guard !Task.isCancelled else { return }
+            let data = WidgetSnapshot.previewData(image)
             entries.append(WidgetSnapshot(title: title, image: data, date: Date()))
         }
-        guard !entries.isEmpty else { return }
+        guard !entries.isEmpty, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
         do {
             try WidgetSnapshotStore.saveMemories(entries)
             UserDefaults.standard.set(stamp, forKey: "widgetMemoriesStamp")

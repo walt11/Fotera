@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct WidgetSnapshot: Codable {
     let title: String
@@ -61,5 +62,24 @@ extension WidgetSnapshotStore {
     static func readBackup() -> BackupWidgetSnapshot? {
         guard let container, let data = try? Data(contentsOf: container.appendingPathComponent("backup-widget.json")) else { return nil }
         return try? JSONDecoder().decode(BackupWidgetSnapshot.self, from: data)
+    }
+}
+
+
+extension WidgetSnapshot {
+    /// Widget extensions have a small memory budget: bound pixels, not screen-scaled points.
+    @MainActor static func previewData(_ image: UIImage) -> Data {
+        let ratio = min(1, 600 / max(1, max(image.size.width, image.size.height)))
+        let size = CGSize(width: max(1, image.size.width * ratio), height: max(1, image.size.height * ratio))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+        return UIGraphicsImageRenderer(size: size, format: format).jpegData(withCompressionQuality: 0.8) { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+    static func needsRefresh(stamp: String, savedStamp: String?, snapshots: [WidgetSnapshot]) -> Bool {
+        savedStamp != stamp || snapshots.isEmpty || snapshots.contains { UIImage(data: $0.image) == nil }
     }
 }

@@ -37,12 +37,21 @@ struct BackupActivityWidget: Widget {
                     Text("\(context.state.percent)%").font(.headline).monospacedDigit()
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(context.isStale ? "Waiting for an update" : context.state.title).font(.subheadline)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(context.isStale ? "Waiting for an update" : context.state.title)
+                                .font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+                            Spacer(minLength: 4)
+                            Text("\(context.state.completed.formatted()) / \(context.state.total.formatted())")
+                                .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                                .accessibilityLabel("\(context.state.completed) of \(context.state.total) backed up")
+                        }
                         ProgressView(value: context.state.fraction).tint(.blue)
-                        Text("\(context.state.completed.formatted()) of \(context.state.total.formatted()) backed up")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(.top, 4)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 4)
+                    .padding(.bottom, 14)
                 }
             } compactLeading: {
                 Image(systemName: context.state.symbol).foregroundStyle(.blue)

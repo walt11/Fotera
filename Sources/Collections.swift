@@ -75,6 +75,8 @@ struct LibraryTab: View {
                 }
             }
             .navigationTitle("Library")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .principal) { FoteraBrand(page: "Library") } }
             .navigationDestination(item: $destination) { destination in
                 switch destination {
                 case .recent: CollectionScreen(title: "Recently added", source: .recentlyAdded)
@@ -546,7 +548,8 @@ struct SearchTab: View {
                 if submitted.isEmpty { explore } else { CollectionScreen(title: submitted, source: .search(submitted)).id(submitted) }
             }
             .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(submitted.isEmpty ? .large : .inline)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .principal) { FoteraBrand(page: "Search") } }
             .searchable(text: $query, prompt: "People, places, things, files")
             .searchSuggestions { suggestions }
             .onSubmit(of: .search) { submit(query) }

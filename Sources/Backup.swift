@@ -552,14 +552,14 @@ struct BackupView: View {
                 Toggle("Auto-create year/month folders", isOn: binding(\.organizeByMonth))
                     .disabled(backup.preferences.enabled)
             } header: { Text("Auto-created folders") } footer: {
-                Text("New backups go into YYYY/MM folders under your chosen destination, using the date each photo or video was taken. Items without a capture date go into Unknown Date. Previously backed-up items stay where they are. Turn off backup to change this option.")
+                Text("Organize new uploads by capture date (YYYY/MM). Undated items go in Unknown Date. Turn off backup to change this; existing uploads stay in place.")
             }
             Section {
                 Toggle("Include existing photos", isOn: binding(\.includeExisting)).disabled(backup.preferences.enabled)
                 Toggle("Videos", isOn: binding(\.includeVideos))
                 Toggle("Edited versions", isOn: binding(\.includeEdited))
             } header: { Text("What to back up") } footer: {
-                Text("Originals are always backed up, including both parts of Live Photos and RAW+JPEG pairs. Edited versions are saved alongside them.")
+                Text("Includes originals, Live Photos and RAW+JPEG pairs. Edits are saved separately.")
             }
             Section {
                 Toggle("Show in Dynamic Island", isOn: binding(\.showLiveActivity))
@@ -570,7 +570,7 @@ struct BackupView: View {
                     Toggle("Verify videos by downloading", isOn: binding(\.verifyVideos))
                 }
             } header: { Text("Options") } footer: {
-                Text("Backup progress also appears on the Lock Screen when Live Activities are allowed. Updates may pause while iOS suspends Fotera. Verification downloads each upload from the NAS and compares it byte for byte. Uploads continue while Fotera is in the background; iOS decides when background work runs, so opening Fotera now and then keeps backup current.")
+                Text("iOS controls background backup and Live Activity updates. Open Fotera occasionally to keep backup current. Verification downloads uploaded files to check their contents.")
             }
             Section {
                 NavigationLink { BackupHistoryView() } label: { Label("Backup history", systemImage: "clock.arrow.circlepath") }
@@ -580,7 +580,7 @@ struct BackupView: View {
                     if value { Task { await BackupNotifier.requestPermission() } }
                 })) { Label("Notifications", systemImage: "bell") }
             } footer: {
-                Text("Notifications tell you when a backup finishes in the background, when files need attention, or when backup hasn’t completed for 3 days.")
+                Text("Get backup completion, error and reminder notifications.")
             }
             if let queue = backup.queue { TransferListSections(queue: queue) }
         }

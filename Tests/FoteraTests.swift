@@ -13,6 +13,34 @@ final class FoteraTests: XCTestCase {
         return item
     }
 
+    func testPhoneDeletionRequiresContentMatchAndValidSourceIdentity() {
+        XCTAssertEqual(PhoneDeletionMatch.sourceAssetID("false|12|ABC/L0/001|1|0"), "ABC/L0/001")
+        XCTAssertEqual(PhoneDeletionMatch.sourceAssetID("true|12|ABC/L0/001|5|1|e123"), "ABC/L0/001")
+        XCTAssertNil(PhoneDeletionMatch.sourceAssetID("IMG_1234.HEIC"))
+        XCTAssertNil(PhoneDeletionMatch.sourceAssetID("false|12||1|0"))
+        XCTAssertFalse(PhoneDeletionMatch.sameContent(remote: ["nas-hash"], local: "different-phone-hash"))
+        XCTAssertFalse(PhoneDeletionMatch.sameContent(remote: [""], local: ""))
+        XCTAssertTrue(PhoneDeletionMatch.sameContent(remote: ["still-hash", "motion-hash"], local: "still-hash"))
+    }
+
+    @MainActor func testWidgetPreviewHasBoundedPixelDimensions() throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 3
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 400), format: format).image { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
+        }
+        let decoded = try XCTUnwrap(UIImage(data: WidgetSnapshot.previewData(image))?.cgImage)
+        XCTAssertEqual(decoded.width, 600)
+        XCTAssertEqual(decoded.height, 300)
+    }
+    @MainActor func testWidgetRefreshRepairsMissingOrInvalidSnapshots() {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { _ in }
+        let valid = WidgetSnapshot(title: "Test", image: WidgetSnapshot.previewData(image), date: Date())
+        XCTAssertTrue(WidgetSnapshot.needsRefresh(stamp: "today", savedStamp: "today", snapshots: []))
+        XCTAssertTrue(WidgetSnapshot.needsRefresh(stamp: "today", savedStamp: "today", snapshots: [.init(title: "Bad", image: Data(), date: Date())]))
+        XCTAssertTrue(WidgetSnapshot.needsRefresh(stamp: "new account", savedStamp: "today", snapshots: [valid]))
+        XCTAssertFalse(WidgetSnapshot.needsRefresh(stamp: "today", savedStamp: "today", snapshots: [valid]))
+    }
+
     func testLiveDuplicateCheckAcceptsPlainStillAndRejectsCorruptArchive() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".zip")
         defer { try? FileManager.default.removeItem(at: file) }

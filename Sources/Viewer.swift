@@ -167,9 +167,7 @@ struct MediaViewer: View {
         guard let source = item.thumbnailSource else { return }
         runner.run("Updating widget…") {
             guard let image = await ImagePipeline.shared.image(source, shared: shared, size: .xl) else { throw ConnectionError.invalidResponse }
-            let scale = min(1, 800 / max(image.size.width, image.size.height))
-            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-            let data = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.85) { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+            let data = WidgetSnapshot.previewData(image)
             let title = item.date.map { PhotoTime.format($0, .dateTime.month(.abbreviated).day().year()) } ?? "From your library"
             try WidgetSnapshotStore.save(.init(title: title, image: data, date: Date()))
             WidgetCenter.shared.reloadAllTimelines()

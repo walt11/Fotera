@@ -221,13 +221,13 @@ struct ConnectionSettingsView: View {
                 TextField("https://nas.example.com:5001", text: $remoteURL)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .accessibilityLabel("Remote HTTPS URL")
-                Text("Enter your full HTTPS server address, including a port if needed.")
+                Text("Include a port if needed.")
                     .font(.footnote).foregroundStyle(.secondary)
-                TextField("QuickConnect ID (optional fallback)", text: $quickConnect)
+                TextField("QuickConnect ID (optional)", text: $quickConnect)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
             Section {
-                Text("Fotera prefers LAN, then your remote HTTPS URL, then other saved routes or QuickConnect. Each address must reach the same NAS. Your account and backup history stay the same. LAN HTTP is unencrypted.")
+                Text("Uses LAN when available, then your remote address or QuickConnect. All addresses must reach the same NAS. HTTP is unencrypted.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("Save connections") { Task { await save() } }.disabled(saving)
                 if !app.activeConnection.isEmpty { LabeledContent("Current connection", value: app.activeConnectionLabel) }

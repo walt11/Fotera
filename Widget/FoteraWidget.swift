@@ -17,7 +17,7 @@ struct PhotoProvider: TimelineProvider {
         }
         let memories = WidgetSnapshotStore.readMemories()
         guard !memories.isEmpty else {
-            completion(Timeline(entries: [PhotoEntry(date: Date(), snapshot: nil)], policy: .after(Date().addingTimeInterval(6 * 3600)))); return
+            completion(Timeline(entries: [PhotoEntry(date: Date(), snapshot: nil)], policy: .after(Date().addingTimeInterval(15 * 60)))); return
         }
         let start = Date()
         let entries = (0..<12).map { hour in
@@ -40,7 +40,7 @@ struct PhotoWidgetView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Image(systemName: "photo.stack").font(.title).foregroundStyle(.tint)
                     Text("Fotera").font(.headline)
-                    Text("Memories from your NAS appear here.").font(.caption).foregroundStyle(.secondary)
+                    Text("Open Fotera to prepare your memories.").font(.caption).foregroundStyle(.secondary)
                 }.padding()
             }
         }.containerBackground(.background, for: .widget)

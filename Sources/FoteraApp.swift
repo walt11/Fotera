@@ -7,10 +7,23 @@ import WidgetKit
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--memory-navigation-test") {
+            if ProcessInfo.processInfo.arguments.contains("--delete-warning-preview") {
+                DeleteWarningPreview().environmentObject(app)
+            } else if ProcessInfo.processInfo.arguments.contains("--memory-navigation-test") {
                 MemoryNavigationPreview().environmentObject(app)
             } else if ProcessInfo.processInfo.arguments.contains("--map-stress-test") {
                 MapStressPreview().environmentObject(app)
+            } else if ProcessInfo.processInfo.arguments.contains("--ui-preview") {
+                Group {
+                    if DebugScreen.name == "settings" { SettingsView() }
+                    else { MainTabs() }
+                }.environmentObject(app)
+                    .task {
+                        if ProcessInfo.processInfo.arguments.contains("--island-preview") {
+                            try? await Task.sleep(for: .seconds(1))
+                            BackupLiveActivity.shared.publish(.init(completed: 1049, total: 2305, awaitingVerification: 0, phase: .uploading), enabled: true)
+                        }
+                    }
             } else { RootView().environmentObject(app) }
             #else
             RootView().environmentObject(app)
@@ -406,7 +419,8 @@ struct LoginView: View {
         ScrollView {
             VStack(spacing: 28) {
                 VStack(spacing: 10) {
-                    Image(systemName: "photo.stack.fill").font(.system(size: 56)).foregroundStyle(.tint)
+                    Image("FoteraMark").resizable().scaledToFit().frame(width: 80, height: 80)
+                        .clipShape(RoundedRectangle(cornerRadius: 18)).accessibilityHidden(true)
                     Text("Fotera").font(.largeTitle.bold())
                     Text("Your Synology Photos library").foregroundStyle(.secondary)
                 }.padding(.top, 48)
@@ -424,7 +438,7 @@ struct LoginView: View {
                     Toggle("Stay signed in", isOn: $remember).padding(.horizontal, 4).padding(.top, 4)
                 }
                 if app.addingAccount != nil {
-                    Button("Cancel and go back") { Task { await app.cancelAddingAccount() } }
+                    Button("Cancel") { Task { await app.cancelAddingAccount() } }
                 }
                 if let message = failure ?? app.notice {
                     Text(message).font(.footnote).foregroundStyle(failure == nil ? Color.secondary : Color.red).multilineTextAlignment(.center)
@@ -436,10 +450,10 @@ struct LoginView: View {
                 .buttonStyle(.borderedProminent).buttonBorderShape(.roundedRectangle(radius: 12))
                 .disabled(busy || address.isEmpty || username.isEmpty || password.isEmpty)
                 if address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("http://") {
-                    Label("LAN HTTP is not encrypted. Use it only on a trusted local network; your login and photos travel without encryption.", systemImage: "lock.open")
+                    Label("HTTP sends your login and photos without encryption. Use only on a trusted local network.", systemImage: "lock.open")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                Text("Enter your NAS address or QuickConnect ID. HTTP is supported for local IP addresses and .local names; QuickConnect uses verified HTTPS. “Stay signed in” keeps your password in this iPhone’s Keychain so backup can renew its session.")
+                Text("“Stay signed in” securely saves your password for automatic backup.")
                     .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(.horizontal, 24)
@@ -520,7 +534,7 @@ struct PhotosTab: View {
                                 Button("Select", systemImage: "checkmark.circle") { selection = [] }
                             } label: {
                                 HStack(spacing: 4) {
-                                    Text(app.shared ? "Shared" : "Photos").font(.headline)
+                                    FoteraBrand(page: app.shared ? "Shared photos" : "Photos")
                                     Image(systemName: "chevron.down").font(.caption.weight(.bold))
                                 }
                                 .foregroundStyle(.primary)

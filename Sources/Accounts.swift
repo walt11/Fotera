@@ -91,7 +91,7 @@ struct AccountsSection: View {
                 Label("Add account", systemImage: "person.badge.plus")
             }
         } header: { Text("Accounts") } footer: {
-            Text("Backup runs for the account you’re using. Other accounts stay signed in until you switch to them.")
+            Text("Backup uses your active account.")
         }
     }
 }

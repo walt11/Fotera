@@ -326,3 +326,23 @@ struct MemoryNavigationPreview: View {
     }
 }
 #endif
+
+
+/// Compact branding for the app's main pages.
+struct FoteraBrand: View {
+    var page: String? = nil
+    var body: some View {
+        HStack(spacing: 8) {
+            Image("FoteraMark").resizable().scaledToFit()
+                .frame(width: 30, height: 30)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Fotera").font(.headline)
+                if let page { Text(page).font(.caption2).foregroundStyle(.secondary) }
+            }
+        }
+        .foregroundStyle(.primary)
+        .accessibilityElement(children: .combine)
+    }
+}
