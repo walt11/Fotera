@@ -256,7 +256,9 @@ actor DSMClient {
             NotificationCenter.default.post(name: .foteraRouteChanged, object: self, userInfo: ["url": new.absoluteString])
         }
         if ConnectionAddress.isLAN(previous.host ?? ""), !ConnectionAddress.isLAN(new.host ?? "") {
+            #if os(iOS)
             Task { await BackgroundUploads.shared.migrateUploads(from: previous) }
+            #endif
         }
     }
     // MARK: Transport
@@ -556,8 +558,15 @@ actor DSMClient {
     }
     func albums(offset: Int, limit: Int = 100) async throws -> [RemoteAlbum] {
         struct Page: Decodable { let list: [RemoteAlbum] }
-        return try await call("SYNO.Foto.Browse.Album", 1, "list", ["offset": String(offset), "limit": String(limit),
+        var albums = try await call("SYNO.Foto.Browse.Album", 1, "list", ["offset": String(offset), "limit": String(limit),
             "additional": "[\"thumbnail\"]"], as: Page.self).list
+        guard !albums.isEmpty else {return albums}
+        struct SharingPage:Decodable {let list:[AlbumSharingState]}
+        let ids = String(decoding:try JSONEncoder().encode(albums.map(\.id)),as:UTF8.self)
+        let sharing = try await call("SYNO.Foto.Browse.Album",1,"get",["id":ids,"additional":"[\"sharing_info\"]"],as:SharingPage.self).list
+        let states = Dictionary(sharing.map{($0.id,$0)},uniquingKeysWith:{_,new in new})
+        for index in albums.indices {if let state = states[albums[index].id] {albums[index].shared = state.hasActiveSharing()}}
+        return albums
     }
     func allAlbums() async throws -> [RemoteAlbum] {
         var result: [RemoteAlbum] = []; var seen = Set<Int>(); var offset = 0
@@ -573,19 +582,25 @@ actor DSMClient {
         return try await call(space(shared, "Browse.Person"), 1, "list", ["offset": String(offset), "limit": String(limit),
             "show_more": "true", "show_hidden": "false", "additional": "[\"thumbnail\"]"], as: Page.self).list
     }
-    /// Uses Person.set, not Album.set_name. Read back the name before reporting success.
+    /// Persist the user's intent before sending it; success requires independent NAS reads.
     func renamePerson(id: Int, name: String, shared: Bool) async throws -> RemoteGroup {
-        try await mutation(space(shared, "Browse.Person"), method: "set", fields: ["id": String(id), "name": String(decoding: try JSONEncoder().encode(name), as: UTF8.self)])
-        var offset = 0
-        while true {
-            let page = try await people(shared: shared, offset: offset)
-            if let person = page.first(where: { $0.id == id }) {
-                guard person.name == name else { throw ConnectionError.invalidResponse }
-                return person
+        let key = address + "|" + username
+        try await PersonNameHistory.shared.record(account:key,id:id,shared:shared,name:name,confirmed:false)
+        try await mutation(space(shared, "Browse.Person"), method: "set", fields: ["id": String(id), "name": try Self.json(name)])
+        var verified: RemoteGroup?
+        for attempt in 0..<2 {
+            if attempt > 0 { try await Task.sleep(for:.milliseconds(500)) }
+            guard let person = try await allPeople(shared:shared,includeHidden:true).first(where:{$0.id == id}), person.name == name else {
+                throw FeatureError.message("The NAS has not confirmed this name. Your entry is saved on this device for retry.")
             }
-            if page.count < 200 { throw ConnectionError.invalidResponse }
-            offset += page.count
+            verified = person
         }
+        guard let verified else { throw ConnectionError.invalidResponse }
+        try await PersonNameHistory.shared.record(account:key,id:id,shared:shared,name:name,confirmed:true)
+        return verified
+    }
+    func savedPersonName(id:Int,shared:Bool) async -> PersonNameHistory.Entry? {
+        await PersonNameHistory.shared.entry(account:address + "|" + username,id:id,shared:shared)
     }
     func places(shared: Bool, offset: Int = 0, limit: Int = 200) async throws -> [RemoteGroup] {
         struct Page: Decodable { let list: [RemoteGroup] }
@@ -663,7 +678,7 @@ actor DSMClient {
         return try await authorized { sid in
             let info = try self.info(api, 1)
             var fields = ["api": api, "version": "1", "method": "download", "_sid": sid, "item_id": "[\(photo.id)]", "force_download": "true"]
-            if photo.type == "live" {
+            if photo.isLive {
                 fields.removeValue(forKey: "item_id"); fields.removeValue(forKey: "force_download")
                 fields["unit_id"] = "[\(photo.additional?.thumbnail?.unit_id ?? photo.id)]"
             }
@@ -754,9 +769,13 @@ actor DSMClient {
     // MARK: Upload
 
     /// Writes a multipart body for the background session and returns the request to submit.
-    func makeUploadRequest(source: URL, filename: String, folder: String, shared: Bool, transferID: UUID, wifiOnly: Bool) async throws -> URLRequest {
+    func makeUploadRequest(source: URL, filename: String, folder: String, shared: Bool, transferID: UUID, wifiOnly: Bool, includePreviews: Bool = true) async throws -> URLRequest {
         let api = space(shared, "Upload.Item")
         let info = try info(api, 1)
+        // Version 8 and multipart fields observed in this NAS's Synology Photos web client.
+        let version = info.maxVersion >= 8 ? 8 : 1
+        let previews = version == 8 && includePreviews ? try await UploadPreviews.generate(source: source, filename: filename) : []
+        try Task.checkCancellation()
         let destination = try await folderID(path: folder, shared: shared)
         guard let sid else { throw ConnectionError.signedOut }
         let boundary = "Fotera-" + UUID().uuidString
@@ -766,11 +785,16 @@ actor DSMClient {
         let output = try FileHandle(forWritingTo: body)
         do {
             let modified = (try? source.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
-            let fields: [(String, String)] = [("api", api), ("version", "1"), ("method", "upload_to_folder"), ("duplicate", "\"ignore\""),
+            let fields: [(String, String)] = [("api", api), ("version", String(version)), ("method", "upload_to_folder"), ("duplicate", "\"ignore\""),
                 ("name", String(decoding: try JSONEncoder().encode(filename), as: UTF8.self)),
                 ("mtime", String(Int(modified.timeIntervalSince1970))), ("target_folder_id", String(destination))]
             for (key, value) in fields {
                 try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(key)\"\r\n\r\n\(value)\r\n".utf8))
+            }
+            for preview in previews {
+                try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(preview.field)\"; filename=\"\(preview.field).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8))
+                try output.write(contentsOf: preview.data)
+                try output.write(contentsOf: Data("\r\n".utf8))
             }
             let safeName = filename.map { "\"\r\n".contains($0) ? "_" : String($0) }.joined()
             try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
@@ -787,7 +811,7 @@ actor DSMClient {
             try? output.close(); try? FileManager.default.removeItem(at: body); throw error
         }
         var components = URLComponents(url: base.appendingPathComponent("webapi").appendingPathComponent(info.path), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "version", value: "1"), URLQueryItem(name: "method", value: "upload_to_folder")]
+        components.queryItems = [URLQueryItem(name: "api", value: api), URLQueryItem(name: "version", value: String(version)), URLQueryItem(name: "method", value: "upload_to_folder")]
         var request = URLRequest(url: components.url!)
         request.httpMethod = "POST"
         request.httpShouldHandleCookies = false
@@ -868,25 +892,55 @@ actor DSMClient {
         guard let state = result.list.first(where: { $0.id == id }) else { throw ConnectionError.invalidResponse }
         return state
     }
+    func albumSharingMembers() async throws -> [AlbumShareMember] {
+        struct Page: Decodable { let list: [AlbumShareMember] }
+        return try await call("SYNO.Foto.Sharing.Misc", 1, "list_user_group", as: Page.self).list
+            .filter { $0.type == "user" }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+    private func enabledAlbumSharing(id: Int) async throws -> AlbumSharingState {
+        var state = try await albumSharing(id: id)
+        if state.shared != true {
+            try await mutation("SYNO.Foto.Sharing.Passphrase", method: "set_shared", fields: ["policy": "\"album\"", "album_id": String(id), "enabled": "true"])
+            state = try await albumSharing(id: id)
+        }
+        guard state.shared == true else { throw ConnectionError.invalidResponse }
+        return state
+    }
+    private func sharingToken(_ state: AlbumSharingState) throws -> String {
+        guard let token = state.additional?.sharing_info?.passphrase ?? state.passphrase, !token.isEmpty else { throw ConnectionError.invalidResponse }
+        return token
+    }
+    func updateAlbumMember(id: Int, member: AlbumShareMember, role: AlbumShareRole?) async throws -> AlbumSharingState {
+        guard member.type == "user" else { throw ConnectionError.invalidResponse }
+        let initial = try await enabledAlbumSharing(id: id)
+        var change: [String: Any] = ["action": role == nil ? "delete" : "update", "member": ["type": member.type, "id": member.id]]
+        if let role { change["role"] = role.rawValue }
+        try await mutation("SYNO.Foto.Sharing.Passphrase", method: "update", fields: [
+            "passphrase": try Self.json(sharingToken(initial)),
+            "permission": String(decoding: try JSONSerialization.data(withJSONObject: [change]), as: UTF8.self)])
+        let result = try await albumSharing(id: id)
+        guard let permissions = result.additional?.sharing_info?.permission else { throw ConnectionError.invalidResponse }
+        let actual = permissions.first { $0.member.type == member.type && $0.member.id == member.id }
+        guard actual?.role == role?.rawValue else { throw ConnectionError.invalidResponse }
+        return result
+    }
     func updateAlbumSharing(id: Int, enabled: Bool, role: String, password: String, expiration: Date?) async throws -> AlbumSharingState {
         guard ["view", "download"].contains(role) else { throw ConnectionError.invalidResponse }
-        try await mutation("SYNO.Foto.Sharing.Passphrase", method: "set_shared", fields: ["policy": "\"album\"", "album_id": String(id), "enabled": enabled ? "true" : "false"])
+        // Only change public access. Existing users must survive link edits and removal.
+        let initial = enabled ? try await enabledAlbumSharing(id: id) : try await albumSharing(id: id)
+        guard initial.shared == true else { return initial }
+        var permission: [String: Any] = ["action": enabled ? "update" : "delete", "member": ["type": "public"]]
+        if enabled { permission["role"] = role }
+        var fields = ["passphrase": try Self.json(sharingToken(initial)),
+                      "permission": String(decoding: try JSONSerialization.data(withJSONObject: [permission]), as: UTF8.self)]
         if enabled {
-            let initial = try await albumSharing(id: id)
-            guard let passphrase = initial.additional?.sharing_info?.passphrase ?? initial.passphrase, !passphrase.isEmpty else { throw ConnectionError.invalidResponse }
-            let permission: [[String: Any]] = [["action": "update", "role": role, "member": ["type": "public"]]]
-            try await mutation("SYNO.Foto.Sharing.Passphrase", method: "update", fields: [
-                "passphrase": String(decoding: try JSONEncoder().encode(passphrase), as: UTF8.self),
-                "permission": String(decoding: try JSONSerialization.data(withJSONObject: permission), as: UTF8.self),
-                "password": String(decoding: try JSONEncoder().encode(password), as: UTF8.self),
-                "expiration": String(Int(expiration?.timeIntervalSince1970 ?? 0))])
+            fields["password"] = try Self.json(password)
+            fields["expiration"] = String(Int(expiration?.timeIntervalSince1970 ?? 0))
         }
+        try await mutation("SYNO.Foto.Sharing.Passphrase", method: "update", fields: fields)
         let result = try await albumSharing(id: id)
-        guard (result.shared ?? false) == enabled else { throw ConnectionError.invalidResponse }
-        if enabled {
-            guard result.additional?.sharing_info?.privacy_type == "public-" + role,
-                  (result.additional?.sharing_info?.enable_password ?? false) == !password.isEmpty else { throw ConnectionError.invalidResponse }
-        }
+        guard result.additional?.sharing_info?.privacy_type == (enabled ? "public-" + role : "private") else { throw ConnectionError.invalidResponse }
+        if enabled, (result.additional?.sharing_info?.enable_password ?? false) != !password.isEmpty { throw ConnectionError.invalidResponse }
         return result
     }
     func recycleBinEnabled(shared: Bool) async throws -> Bool {
@@ -1203,5 +1257,22 @@ extension DSMClient {
         let ids = Set(faces); guard !ids.isEmpty, Set(try await personFaces(person: person, shared: shared).map(\.id)).isSuperset(of: ids) else { throw ConnectionError.invalidResponse }
         try await mutation(space(shared, "Browse.Person"), method: "separate", fields: ["target_id": "0", "name": try Self.json(""), "face_id": try Self.json(Array(ids))])
         guard Set(try await personFaces(person: person, shared: shared).map(\.id)).isDisjoint(with: ids) else { throw ConnectionError.invalidResponse }
+    }
+}
+
+/// Recovery history only. Never overwrites names changed in Synology Photos automatically.
+actor PersonNameHistory {
+    static let shared = PersonNameHistory()
+    struct Entry: Codable { let personID:Int; let shared:Bool; let name:String; let confirmed:Bool; let updated:Date }
+    private let root:URL
+    init(root:URL? = nil) {self.root = root ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("FoteraPersonNames")}
+    private func file(_ account:String) -> URL {root.appendingPathComponent(LibraryCache.hash(account) + ".json")}
+    func entries(account:String) -> [Entry] {guard let data = try? Data(contentsOf:file(account)) else {return []}; return (try? JSONDecoder().decode([Entry].self,from:data)) ?? []}
+    func entry(account:String,id:Int,shared:Bool) -> Entry? {entries(account:account).first{$0.personID == id && $0.shared == shared}}
+    func record(account:String,id:Int,shared:Bool,name:String,confirmed:Bool) throws {
+        var values = entries(account:account); values.removeAll{$0.personID == id && $0.shared == shared}
+        values.append(.init(personID:id,shared:shared,name:name,confirmed:confirmed,updated:Date()))
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        try JSONEncoder().encode(values).write(to:file(account),options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
     }
 }

@@ -154,28 +154,85 @@ struct TileBadges: View {
     }
 }
 
-// MARK: - Backup progress line
+// MARK: - Transient timeline status
 
-/// A slim progress line under the top bar while backup runs. Tap to open Backup.
-struct BackupProgressLine: View {
+/// Lives above the grid, never in its layout. Progress counts do not extend the
+/// dismissal deadline or bring a dismissed popup back during the same operation.
+struct TimelineStatusPopup: View {
+    @ObservedObject var library: LibraryStore
     @ObservedObject var backup: BackupController
-    let open: () -> Void
+    let notice: String?
+    @State private var message: String?
+    @State private var symbol = "info.circle"
+    @State private var category = ""
+    @State private var presentation = UUID()
+    private var backingUp: Bool { backup.running && backup.preferences.enabled }
+
     var body: some View {
-        if backup.running && backup.preferences.enabled {
-            Button(action: open) {
-                VStack(spacing: 4) {
-                    ProgressView(value: Double(backup.backedUpAssets), total: Double(max(1, backup.totalAssets)))
-                        .progressViewStyle(.linear).tint(.accentColor)
-                    Text(backup.status).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, Theme.medium).padding(.vertical, 6)
-                .background(.bar)
+        Group {
+            if let message {
+                Label(message, systemImage: symbol)
+                    .font(.footnote)
+                    .lineLimit(3)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    .frame(maxWidth: 340)
+                    .transition(.opacity)
+                    .accessibilityLabel(message)
             }
-            .buttonStyle(.plain)
-            .transition(.move(edge: .top).combined(with: .opacity))
-            .accessibilityLabel("Backup in progress. \(backup.status)")
         }
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.2), value: message != nil)
+        .onAppear {
+            if let notice { show(notice, category: "notice") }
+            else if let failure = library.failure { show("Couldn’t refresh: " + failure, category: "failure") }
+            else if let progress = library.progress { show(progress, category: "indexing") }
+            else if backingUp { show(backup.status, category: "backup") }
+        }
+        .onChange(of: notice) { _, value in
+            if let value { show(value, category: "notice") }
+            else { clear("notice") }
+        }
+        .onChange(of: library.failure) { _, value in
+            if let value { show("Couldn’t refresh: " + value, category: "failure") }
+            else { clear("failure") }
+        }
+        .onChange(of: library.progress) { old, value in
+            if let value {
+                if old == nil { show(value, category: "indexing") }
+                else if category == "indexing", message != nil { message = value }
+            } else { clear("indexing") }
+        }
+        .onChange(of: backingUp) { _, active in
+            if active { show(backup.status, category: "backup") }
+            else { clear("backup") }
+        }
+        .onChange(of: backup.status) { _, value in
+            if category == "backup", message != nil { message = value }
+        }
+        .task(id: presentation) {
+            do { try await Task.sleep(for: .seconds(4)) }
+            catch { return }
+            message = nil
+        }
+    }
+
+    private func show(_ text: String, category: String) {
+        guard !text.isEmpty else { return }
+        // An ongoing operation must not immediately replace an actionable notice.
+        if message != nil, ["notice", "failure"].contains(self.category),
+           ["indexing", "backup"].contains(category) { return }
+        self.category = category
+        symbol = category == "failure" ? "exclamationmark.triangle" :
+            category == "backup" ? "icloud.and.arrow.up" :
+            category == "indexing" ? "arrow.triangle.2.circlepath" : "info.circle"
+        message = text
+        presentation = UUID()
+    }
+
+    private func clear(_ category: String) {
+        if self.category == category { message = nil }
     }
 }
 
@@ -189,24 +246,36 @@ struct MemoryStoryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var index = 0
     @State private var viewer: ViewerRequest?
+    @EnvironmentObject private var app: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     private var items: [RemotePhoto] { memory.items }
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if items.indices.contains(index) {
-                ThumbnailView(source: items[index].thumbnailSource, shared: shared, size: .xl, contentMode: .fit, fallbackPhoto: items[index], animatesLoading: false)
-                    .background(Color.black)
-                    .id(items[index].id)
-                    .ignoresSafeArea()
+                if items[index].isVideo, let client = app.client {
+                    MemoryVideoPage(item: items[index], client: client, shared: shared,
+                                    active: viewer == nil && scenePhase == .active)
+                        .id(items[index].id)
+                        .padding(.top, 70)
+                        .padding(.bottom, 120)
+                } else {
+                    ThumbnailView(source: items[index].thumbnailSource, shared: shared, size: .xl, contentMode: .fit, fallbackPhoto: items[index], animatesLoading: false)
+                        .background(Color.black)
+                        .id(items[index].id)
+                        .ignoresSafeArea()
+                }
             }
-            HStack(spacing: 0) {
-                Color.clear.contentShape(Rectangle()).onTapGesture { step(-1) }
-                Color.clear.contentShape(Rectangle()).onTapGesture { step(1) }
+            if items[safe: index]?.isVideo != true {
+                HStack(spacing: 0) {
+                    Color.clear.contentShape(Rectangle()).onTapGesture { step(-1) }
+                    Color.clear.contentShape(Rectangle()).onTapGesture { step(1) }
+                }
+                .accessibilityElement()
+                .accessibilityLabel("\(memory.title), item \(index + 1) of \(items.count)")
+                .accessibilityAction(named: "Next") { step(1) }
+                .accessibilityAction(named: "Previous") { step(-1) }
             }
-            .accessibilityElement()
-            .accessibilityLabel("\(memory.title), item \(index + 1) of \(items.count)")
-            .accessibilityAction(named: "Next") { step(1) }
-            .accessibilityAction(named: "Previous") { step(-1) }
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 3) {
                     ForEach(items.indices, id: \.self) { position in
@@ -233,6 +302,15 @@ struct MemoryStoryView: View {
                         .accessibilityLabel("Close")
                 }
                 Spacer()
+                if items[safe: index]?.isVideo == true {
+                    HStack(spacing: 40) {
+                        Button { step(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
+                            .disabled(index == 0).accessibilityLabel("Previous")
+                        Text("\(index + 1) of \(items.count)").font(.caption.monospacedDigit())
+                        Button { step(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
+                            .accessibilityLabel(index + 1 == items.count ? "Finish memory" : "Next")
+                    }.frame(maxWidth: .infinity)
+                }
                 Button {
                     guard let photo = items[safe: index] else { return }
                     showInTimeline(photo.id)
@@ -259,6 +337,26 @@ struct MemoryStoryView: View {
         guard next >= 0 else { return }
         guard next < items.count else { dismiss(); return }
         index = next
+    }
+}
+
+
+/// Reuses the viewer's local-first playback, NAS streaming, retry, and cleanup.
+struct MemoryVideoPage: View {
+    let item: RemotePhoto
+    let client: DSMClient
+    let shared: Bool
+    let active: Bool
+    @StateObject private var state: ViewerState
+
+    init(item: RemotePhoto, client: DSMClient, shared: Bool, active: Bool) {
+        self.item = item; self.client = client; self.shared = shared; self.active = active
+        _state = StateObject(wrappedValue: ViewerState(index: 0, currentID: active ? item.id : nil))
+    }
+
+    var body: some View {
+        MediaPage(item: item, client: client, shared: shared, albumID: nil, state: state)
+            .onChange(of: active) { state.currentID = active ? item.id : nil }
     }
 }
 
@@ -344,5 +442,26 @@ struct FoteraBrand: View {
         }
         .foregroundStyle(.primary)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Keep server-owned metadata current after edits made in the web app or another client.
+@MainActor private struct ActiveMetadataRefresh: ViewModifier {
+    @Environment(\.scenePhase) private var phase
+    let key: String
+    let action: @MainActor () async -> Void
+    func body(content: Content) -> some View {
+        content.task(id: key + "|" + String(describing: phase)) {
+            guard phase == .active else { return }
+            while !Task.isCancelled {
+                await action()
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }
+    }
+}
+extension View {
+    @MainActor func refreshWhileActive(key: String, action: @escaping @MainActor () async -> Void) -> some View {
+        modifier(ActiveMetadataRefresh(key: key, action: action))
     }
 }

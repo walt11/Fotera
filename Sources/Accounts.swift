@@ -32,29 +32,40 @@ enum AccountStore {
 enum AccountVault {
     private static func slot(_ account: AccountRef) -> String { "account-" + LibraryCache.hash(account.id) }
     /// Parks the active account's secrets so another account can sign in.
-    static func park(_ account: AccountRef) {
+    @discardableResult static func park(_ account: AccountRef) -> Bool {
         let parked = slot(account)
-        for service in [".session", ".credentials"] {
-            if let data = try? Keychain.load(service: service) {
-                try? Keychain.save(data, service: service, background: true, slot: parked)
-            } else {
-                try? Keychain.clear(service: service, slot: parked)
+        do {
+            // Read both values first. An inaccessible Keychain is not an empty account.
+            let session = try Keychain.load(service: ".session")
+            let credentials = try Keychain.load(service: ".credentials")
+            guard let session else { return false }
+            try Keychain.save(session, service: ".session", background: true, slot: parked)
+            if let credentials { try Keychain.save(credentials, service: ".credentials", background: true, slot: parked) }
+            else { try Keychain.clear(service: ".credentials", slot: parked) }
+            // Do not erase the active session until both parked values are safely saved.
+            do {
+                try Keychain.clear(service: ".credentials")
+                try Keychain.clear(service: ".session")
+            } catch {
+                try? Keychain.save(session, service: ".session", background: true)
+                if let credentials { try? Keychain.save(credentials, service: ".credentials", background: true) }
+                throw error
             }
-            try? Keychain.clear(service: service)
-        }
+            return true
+        } catch { return false }
     }
-    /// Restores a parked account into the active slot. Returns false if nothing was parked.
+    /// Keep the parked copy unless both active writes succeeded.
     @discardableResult static func unpark(_ account: AccountRef) -> Bool {
         let parked = slot(account)
-        guard let session = try? Keychain.load(service: ".session", slot: parked) else { return false }
-        try? Keychain.save(session, service: ".session", background: true)
-        if let credentials = try? Keychain.load(service: ".credentials", slot: parked) {
-            try? Keychain.save(credentials, service: ".credentials", background: true)
-        } else {
-            try? Keychain.clear(service: ".credentials")
-        }
-        discard(account)
-        return true
+        do {
+            guard let session = try Keychain.load(service: ".session", slot: parked) else { return false }
+            let credentials = try Keychain.load(service: ".credentials", slot: parked)
+            if let credentials { try Keychain.save(credentials, service: ".credentials", background: true) }
+            else { try Keychain.clear(service: ".credentials") }
+            try Keychain.save(session, service: ".session", background: true)
+            discard(account)
+            return true
+        } catch { return false }
     }
     static func discard(_ account: AccountRef) {
         for service in [".session", ".credentials"] { try? Keychain.clear(service: service, slot: slot(account)) }
@@ -161,7 +172,9 @@ struct ReauthSheet: View {
     private var window: UIWindow?
     func update(locked: Bool, app: AppModel) {
         if !locked {
-            UIView.animate(withDuration: 0.2, animations: { self.window?.alpha = 0 }) { _ in self.window?.isHidden = true; self.window = nil }
+            guard let retiring = window else { return }
+            window = nil
+            UIView.animate(withDuration: 0.2, animations: { retiring.alpha = 0 }) { _ in retiring.isHidden = true }
             return
         }
         guard window == nil, let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
@@ -195,8 +208,10 @@ struct AppLockView: View {
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            // Without a passcode there's nothing to check against; don't lock the user out.
-            app.locked = false; return
+            // A temporary authentication failure must not bypass the app lock.
+            if (error as? LAError)?.code == .passcodeNotSet { app.locked = false }
+            else { failure = error?.localizedDescription ?? "Authentication is unavailable. Try again." }
+            return
         }
         do {
             if try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock your photo library") {

@@ -1,0 +1,918 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0411B6EE788059AAE71749D8 /* MacWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEAC629A2D9DDD4CD3938D45 /* MacWidgets.swift */; };
+		077DFBFFDF937FFD67DAC1A7 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6B604205C55FF015AEFC9A89 /* PrivacyInfo.xcprivacy */; };
+		0EDC45EDF0EC9ADB15D0204F /* DemoAssets in Resources */ = {isa = PBXBuildFile; fileRef = C06291C8E62844E5DCA6278A /* DemoAssets */; };
+		0FFA9CA54CF1871E29ED0A4A /* ConnectionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E385D39E7C7A86D1CA0F71 /* ConnectionResolver.swift */; };
+		19D33149A330375C4A51B01D /* MacPhotosBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37568640DB63B61062E7B55 /* MacPhotosBackup.swift */; };
+		1D5F1F80F23B783E7B9CF79A /* ConnectionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E385D39E7C7A86D1CA0F71 /* ConnectionResolver.swift */; };
+		2429385ACFF0290DDA61CAC3 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = BD76E49A4D79BBD2D55CC162 /* ZIPFoundation */; };
+		2817100719DC2DF3164592DC /* MacLibraryTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFCF0471EDDBF9450C33E728 /* MacLibraryTools.swift */; };
+		29ED5963D3EB794A29F9CAFA /* LibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD16B138092890F4357CD47E /* LibraryCache.swift */; };
+		2B7E87E02E9FDF3A85D4E800 /* MacExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A588870EF02741AD0B14922F /* MacExport.swift */; };
+		2E0F0E2802782AE4976D532F /* MacExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A588870EF02741AD0B14922F /* MacExport.swift */; };
+		32E7586B2096FCE55123BB6D /* MacViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B73883F2965958964E7498 /* MacViews.swift */; };
+		3411C1FB52A3D52F0C36B0AB /* MacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B477B71E74C036D0470D456 /* MacTests.swift */; };
+		3D213EBE3875CC716D7DDC40 /* MacPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DBC4852E750AF48F9291EB5 /* MacPlatform.swift */; };
+		3D2F1D628F8DA799672B0F1A /* MacBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22AA2B27CA4ADA6F780305D /* MacBackground.swift */; };
+		3E656B848BCC8F8E79345B39 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A6BEF74C512F5973719D3F /* WidgetSnapshot.swift */; };
+		4445AB5A2EC7E7067FA5C1F1 /* DSMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CD4C0D5FBBE2D8A0C980B14 /* DSMClient.swift */; };
+		47ECEB150B9A346AA1D88A8B /* MacPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DBC4852E750AF48F9291EB5 /* MacPlatform.swift */; };
+		4A16A0DC02339FDAB068539D /* MacOffline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E561AF016A6BD8FF7633F31 /* MacOffline.swift */; };
+		4B11F561CAC39CDFB643FD89 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EB955D44DEAD0766AA5FA531 /* Assets.xcassets */; };
+		54B06D3E040AD50F9673473F /* MacWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEAC629A2D9DDD4CD3938D45 /* MacWidgets.swift */; };
+		585AEF5D0E5D469E7443A35A /* PhotoLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2577126AA8FD47C8F4A916 /* PhotoLibrary.swift */; };
+		5A5C0E44F9BC188D84D20D8B /* MacModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8636BD7224CED85E8FBC7B /* MacModel.swift */; };
+		5D4C0E319381C8315DB9AB2B /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F8DDB77AA2A195054F20C77 /* MacApp.swift */; };
+		5E36AAF520779886C304E817 /* FoteraMacWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 56B6620C2D247C88774EFE29 /* FoteraMacWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5E555413E1446171FA120EED /* MacAlbumEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244776DC636388C5A519104F /* MacAlbumEditor.swift */; };
+		6197781A5DD503CE0617FF4B /* DSMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CD4C0D5FBBE2D8A0C980B14 /* DSMClient.swift */; };
+		6B71FB253B83F5CF1DF80734 /* PhotoLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2577126AA8FD47C8F4A916 /* PhotoLibrary.swift */; };
+		6B77F2C152E70A14ED7EE134 /* MacPeopleTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64C6277AB71DB7DB5574013 /* MacPeopleTools.swift */; };
+		6F42E42C826B64C0BF98766B /* MacLocalPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53743A0A42B2A797C99EE458 /* MacLocalPhotos.swift */; };
+		7067D1A5D36D356BC8551D15 /* MacBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22AA2B27CA4ADA6F780305D /* MacBackground.swift */; };
+		75882CF95B767024BA111391 /* MacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B477B71E74C036D0470D456 /* MacTests.swift */; };
+		8662D78251D569ACBFDC6F2E /* MacBackupQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3292CBD5625566C7DF85C2C /* MacBackupQueue.swift */; };
+		9A991101C6806516329D280E /* MacOffline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E561AF016A6BD8FF7633F31 /* MacOffline.swift */; };
+		A04C8239F12D60477823C42F /* FoteraWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B1B727FB704DF7E7D6EEE7 /* FoteraWidget.swift */; };
+		B2D2840DFD0DC7E106B190C5 /* MacPeopleTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64C6277AB71DB7DB5574013 /* MacPeopleTools.swift */; };
+		B3D97DD4E7C3E9C3B946B493 /* MacViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B73883F2965958964E7498 /* MacViews.swift */; };
+		B754780D115F8AB503436206 /* MacTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E03544D4E5165DAE45454E2 /* MacTransferStore.swift */; };
+		BD86D72B7083F01CB9A12D13 /* MacTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E03544D4E5165DAE45454E2 /* MacTransferStore.swift */; };
+		C5F043A0BF42511A67CC3D86 /* MacPhotosBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37568640DB63B61062E7B55 /* MacPhotosBackup.swift */; };
+		C713445AD380C75E9AFF5CE8 /* MacModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8636BD7224CED85E8FBC7B /* MacModel.swift */; };
+		C8AED14458089719E7A3F83B /* MacBackupQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3292CBD5625566C7DF85C2C /* MacBackupQueue.swift */; };
+		CB25625BA7EB48C6E22918D3 /* MacUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAAEE6B51B2659D2C9790286 /* MacUITests.swift */; };
+		D3501E9B0DB4C6F5FF4299E9 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A6BEF74C512F5973719D3F /* WidgetSnapshot.swift */; };
+		D5063DD5C2AA326BC1807460 /* MacSmartAlbums.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27EBE231B11D23DEE854FA7A /* MacSmartAlbums.swift */; };
+		E7C96E03B7389E899B48E6E3 /* MacLocalPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53743A0A42B2A797C99EE458 /* MacLocalPhotos.swift */; };
+		E9401B141EEBEBCFF67F0D78 /* MacLibraryTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFCF0471EDDBF9450C33E728 /* MacLibraryTools.swift */; };
+		EB9576135989A36B7BCE1AD3 /* MacSmartAlbums.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27EBE231B11D23DEE854FA7A /* MacSmartAlbums.swift */; };
+		ED812299753397088955EF59 /* LibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD16B138092890F4357CD47E /* LibraryCache.swift */; };
+		F915C8A804216A340246725A /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = BB9E33FA5CCBCB8819D8884B /* ZIPFoundation */; };
+		F96A76DD3E5B7F5328458901 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A6BEF74C512F5973719D3F /* WidgetSnapshot.swift */; };
+		F9A404228AED111D983005A9 /* MacAlbumEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244776DC636388C5A519104F /* MacAlbumEditor.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0761DC2E771FC6DD24D2A940 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CFEA2F1F76CB3A6505289779 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 982850BB0C49738EB07FF34F;
+			remoteInfo = FoteraMac;
+		};
+		7899371E789DB11B830299B6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CFEA2F1F76CB3A6505289779 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 982850BB0C49738EB07FF34F;
+			remoteInfo = FoteraMac;
+		};
+		F7ECD76347B4D1A60600851B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CFEA2F1F76CB3A6505289779 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D95674B1BE6F7D53DFC0BD93;
+			remoteInfo = FoteraMacWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A5B992EAF900CCBC8669327B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				5E36AAF520779886C304E817 /* FoteraMacWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0E03544D4E5165DAE45454E2 /* MacTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTransferStore.swift; sourceTree = "<group>"; };
+		0E5D4AF5E52F2A65C49E82AA /* FoteraMacLogicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoteraMacLogicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		184EC6277AD2DA032B22E13F /* FoteraMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoteraMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		18E385D39E7C7A86D1CA0F71 /* ConnectionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionResolver.swift; sourceTree = "<group>"; };
+		1C2577126AA8FD47C8F4A916 /* PhotoLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibrary.swift; sourceTree = "<group>"; };
+		244776DC636388C5A519104F /* MacAlbumEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAlbumEditor.swift; sourceTree = "<group>"; };
+		27EBE231B11D23DEE854FA7A /* MacSmartAlbums.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSmartAlbums.swift; sourceTree = "<group>"; };
+		3CD4C0D5FBBE2D8A0C980B14 /* DSMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DSMClient.swift; sourceTree = "<group>"; };
+		47A6BEF74C512F5973719D3F /* WidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshot.swift; sourceTree = "<group>"; };
+		4DBC4852E750AF48F9291EB5 /* MacPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPlatform.swift; sourceTree = "<group>"; };
+		4F8DDB77AA2A195054F20C77 /* MacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacApp.swift; sourceTree = "<group>"; };
+		53743A0A42B2A797C99EE458 /* MacLocalPhotos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLocalPhotos.swift; sourceTree = "<group>"; };
+		56B6620C2D247C88774EFE29 /* FoteraMacWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FoteraMacWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		69B73883F2965958964E7498 /* MacViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacViews.swift; sourceTree = "<group>"; };
+		6ADF397B3D9E0DC736D9FD57 /* Fotera.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Fotera.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B604205C55FF015AEFC9A89 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		6C8636BD7224CED85E8FBC7B /* MacModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacModel.swift; sourceTree = "<group>"; };
+		6E561AF016A6BD8FF7633F31 /* MacOffline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOffline.swift; sourceTree = "<group>"; };
+		7DE5959523B08CA5CAD41352 /* FoteraMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoteraMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9B477B71E74C036D0470D456 /* MacTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTests.swift; sourceTree = "<group>"; };
+		A588870EF02741AD0B14922F /* MacExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacExport.swift; sourceTree = "<group>"; };
+		A64C6277AB71DB7DB5574013 /* MacPeopleTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPeopleTools.swift; sourceTree = "<group>"; };
+		B3292CBD5625566C7DF85C2C /* MacBackupQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBackupQueue.swift; sourceTree = "<group>"; };
+		B37568640DB63B61062E7B55 /* MacPhotosBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPhotosBackup.swift; sourceTree = "<group>"; };
+		C06291C8E62844E5DCA6278A /* DemoAssets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = DemoAssets; sourceTree = SOURCE_ROOT; };
+		D22AA2B27CA4ADA6F780305D /* MacBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBackground.swift; sourceTree = "<group>"; };
+		DD16B138092890F4357CD47E /* LibraryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCache.swift; sourceTree = "<group>"; };
+		DFCF0471EDDBF9450C33E728 /* MacLibraryTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLibraryTools.swift; sourceTree = "<group>"; };
+		EAAEE6B51B2659D2C9790286 /* MacUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUITests.swift; sourceTree = "<group>"; };
+		EB955D44DEAD0766AA5FA531 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F6B1B727FB704DF7E7D6EEE7 /* FoteraWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoteraWidget.swift; sourceTree = "<group>"; };
+		FEAC629A2D9DDD4CD3938D45 /* MacWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWidgets.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		20BD5892E5AA8C7240C08E6D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F915C8A804216A340246725A /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5BE681B68B96A0754627A7F3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2429385ACFF0290DDA61CAC3 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1CFF25C9A11FCF2AF0D4C63B /* Fotera */ = {
+			isa = PBXGroup;
+			children = (
+				6B604205C55FF015AEFC9A89 /* PrivacyInfo.xcprivacy */,
+			);
+			name = Fotera;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		44771BDD4CCD356978640300 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				EAAEE6B51B2659D2C9790286 /* MacUITests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		61E8C3C2AA8CA487029A30D7 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6ADF397B3D9E0DC736D9FD57 /* Fotera.app */,
+				0E5D4AF5E52F2A65C49E82AA /* FoteraMacLogicTests.xctest */,
+				184EC6277AD2DA032B22E13F /* FoteraMacTests.xctest */,
+				7DE5959523B08CA5CAD41352 /* FoteraMacUITests.xctest */,
+				56B6620C2D247C88774EFE29 /* FoteraMacWidget.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		72BD50D2DEC440E614709796 /* Widget */ = {
+			isa = PBXGroup;
+			children = (
+				F6B1B727FB704DF7E7D6EEE7 /* FoteraWidget.swift */,
+			);
+			name = Widget;
+			path = ../Widget;
+			sourceTree = "<group>";
+		};
+		CF8E01C8B9EE89ED023BEAAC /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				18E385D39E7C7A86D1CA0F71 /* ConnectionResolver.swift */,
+				3CD4C0D5FBBE2D8A0C980B14 /* DSMClient.swift */,
+				DD16B138092890F4357CD47E /* LibraryCache.swift */,
+				1C2577126AA8FD47C8F4A916 /* PhotoLibrary.swift */,
+				47A6BEF74C512F5973719D3F /* WidgetSnapshot.swift */,
+			);
+			name = Sources;
+			path = ../Sources;
+			sourceTree = "<group>";
+		};
+		E5EF04B78AA34D4C3ED32272 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				244776DC636388C5A519104F /* MacAlbumEditor.swift */,
+				4F8DDB77AA2A195054F20C77 /* MacApp.swift */,
+				D22AA2B27CA4ADA6F780305D /* MacBackground.swift */,
+				B3292CBD5625566C7DF85C2C /* MacBackupQueue.swift */,
+				A588870EF02741AD0B14922F /* MacExport.swift */,
+				DFCF0471EDDBF9450C33E728 /* MacLibraryTools.swift */,
+				53743A0A42B2A797C99EE458 /* MacLocalPhotos.swift */,
+				6C8636BD7224CED85E8FBC7B /* MacModel.swift */,
+				6E561AF016A6BD8FF7633F31 /* MacOffline.swift */,
+				A64C6277AB71DB7DB5574013 /* MacPeopleTools.swift */,
+				B37568640DB63B61062E7B55 /* MacPhotosBackup.swift */,
+				4DBC4852E750AF48F9291EB5 /* MacPlatform.swift */,
+				27EBE231B11D23DEE854FA7A /* MacSmartAlbums.swift */,
+				0E03544D4E5165DAE45454E2 /* MacTransferStore.swift */,
+				69B73883F2965958964E7498 /* MacViews.swift */,
+				FEAC629A2D9DDD4CD3938D45 /* MacWidgets.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		E8DEECC1AFA05C610AA72306 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				9B477B71E74C036D0470D456 /* MacTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		F5000376D5E8873AE797EEA5 = {
+			isa = PBXGroup;
+			children = (
+				EB955D44DEAD0766AA5FA531 /* Assets.xcassets */,
+				C06291C8E62844E5DCA6278A /* DemoAssets */,
+				1CFF25C9A11FCF2AF0D4C63B /* Fotera */,
+				E5EF04B78AA34D4C3ED32272 /* Sources */,
+				CF8E01C8B9EE89ED023BEAAC /* Sources */,
+				E8DEECC1AFA05C610AA72306 /* Tests */,
+				44771BDD4CCD356978640300 /* UITests */,
+				72BD50D2DEC440E614709796 /* Widget */,
+				61E8C3C2AA8CA487029A30D7 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		548DBF1203DA73A5A20EE3C3 /* FoteraMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 490D6B554754B5CCF301DFBF /* Build configuration list for PBXNativeTarget "FoteraMacTests" */;
+			buildPhases = (
+				1FF266FDB91BF21AA1ADC353 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F98AA9A5FC397C272171016D /* PBXTargetDependency */,
+			);
+			name = FoteraMacTests;
+			packageProductDependencies = (
+			);
+			productName = FoteraMacTests;
+			productReference = 184EC6277AD2DA032B22E13F /* FoteraMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		982850BB0C49738EB07FF34F /* FoteraMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9FDF6BB56D693ADBA492DE2D /* Build configuration list for PBXNativeTarget "FoteraMac" */;
+			buildPhases = (
+				F78DBF03870A39C73B482097 /* Sources */,
+				F2D4AE669151DBDD731EE7A7 /* Resources */,
+				5BE681B68B96A0754627A7F3 /* Frameworks */,
+				A5B992EAF900CCBC8669327B /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2B8882B773F2FA65DCDC7B3E /* PBXTargetDependency */,
+			);
+			name = FoteraMac;
+			packageProductDependencies = (
+				BD76E49A4D79BBD2D55CC162 /* ZIPFoundation */,
+			);
+			productName = FoteraMac;
+			productReference = 6ADF397B3D9E0DC736D9FD57 /* Fotera.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AF373FDAFAF47406CE3FEF9C /* FoteraMacUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7706FEEC78CB18D2F20F22C2 /* Build configuration list for PBXNativeTarget "FoteraMacUITests" */;
+			buildPhases = (
+				1D570C4669AA576AA34F99C6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2AFAE9715F53DD17AD69F9CE /* PBXTargetDependency */,
+			);
+			name = FoteraMacUITests;
+			packageProductDependencies = (
+			);
+			productName = FoteraMacUITests;
+			productReference = 7DE5959523B08CA5CAD41352 /* FoteraMacUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		CB2292EAB6C66BE8381FECF8 /* FoteraMacLogicTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A515C31B12116004BCE330C /* Build configuration list for PBXNativeTarget "FoteraMacLogicTests" */;
+			buildPhases = (
+				E3D12CE4FF39095BAC7B0A46 /* Sources */,
+				20BD5892E5AA8C7240C08E6D /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FoteraMacLogicTests;
+			packageProductDependencies = (
+				BB9E33FA5CCBCB8819D8884B /* ZIPFoundation */,
+			);
+			productName = FoteraMacLogicTests;
+			productReference = 0E5D4AF5E52F2A65C49E82AA /* FoteraMacLogicTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		D95674B1BE6F7D53DFC0BD93 /* FoteraMacWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 22B5E26E46F2F4512466E737 /* Build configuration list for PBXNativeTarget "FoteraMacWidget" */;
+			buildPhases = (
+				8A8B0646940636DD2B7105EB /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FoteraMacWidget;
+			packageProductDependencies = (
+			);
+			productName = FoteraMacWidget;
+			productReference = 56B6620C2D247C88774EFE29 /* FoteraMacWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		CFEA2F1F76CB3A6505289779 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					548DBF1203DA73A5A20EE3C3 = {
+						DevelopmentTeam = 76BJCJ4Q7X;
+						ProvisioningStyle = Automatic;
+					};
+					982850BB0C49738EB07FF34F = {
+						DevelopmentTeam = 76BJCJ4Q7X;
+						ProvisioningStyle = Automatic;
+					};
+					AF373FDAFAF47406CE3FEF9C = {
+						DevelopmentTeam = 76BJCJ4Q7X;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 982850BB0C49738EB07FF34F;
+					};
+					CB2292EAB6C66BE8381FECF8 = {
+						DevelopmentTeam = 76BJCJ4Q7X;
+						ProvisioningStyle = Automatic;
+					};
+					D95674B1BE6F7D53DFC0BD93 = {
+						DevelopmentTeam = 76BJCJ4Q7X;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B4186309817913858D7F8B6A /* Build configuration list for PBXProject "FoteraMac" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = F5000376D5E8873AE797EEA5;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8D5100ECF9DBFA4B306AF5A5 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 61E8C3C2AA8CA487029A30D7 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				982850BB0C49738EB07FF34F /* FoteraMac */,
+				D95674B1BE6F7D53DFC0BD93 /* FoteraMacWidget */,
+				548DBF1203DA73A5A20EE3C3 /* FoteraMacTests */,
+				CB2292EAB6C66BE8381FECF8 /* FoteraMacLogicTests */,
+				AF373FDAFAF47406CE3FEF9C /* FoteraMacUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F2D4AE669151DBDD731EE7A7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B11F561CAC39CDFB643FD89 /* Assets.xcassets in Resources */,
+				0EDC45EDF0EC9ADB15D0204F /* DemoAssets in Resources */,
+				077DFBFFDF937FFD67DAC1A7 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1D570C4669AA576AA34F99C6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CB25625BA7EB48C6E22918D3 /* MacUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1FF266FDB91BF21AA1ADC353 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3411C1FB52A3D52F0C36B0AB /* MacTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8A8B0646940636DD2B7105EB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A04C8239F12D60477823C42F /* FoteraWidget.swift in Sources */,
+				3E656B848BCC8F8E79345B39 /* WidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E3D12CE4FF39095BAC7B0A46 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D5F1F80F23B783E7B9CF79A /* ConnectionResolver.swift in Sources */,
+				6197781A5DD503CE0617FF4B /* DSMClient.swift in Sources */,
+				ED812299753397088955EF59 /* LibraryCache.swift in Sources */,
+				F9A404228AED111D983005A9 /* MacAlbumEditor.swift in Sources */,
+				3D2F1D628F8DA799672B0F1A /* MacBackground.swift in Sources */,
+				C8AED14458089719E7A3F83B /* MacBackupQueue.swift in Sources */,
+				2B7E87E02E9FDF3A85D4E800 /* MacExport.swift in Sources */,
+				2817100719DC2DF3164592DC /* MacLibraryTools.swift in Sources */,
+				E7C96E03B7389E899B48E6E3 /* MacLocalPhotos.swift in Sources */,
+				5A5C0E44F9BC188D84D20D8B /* MacModel.swift in Sources */,
+				4A16A0DC02339FDAB068539D /* MacOffline.swift in Sources */,
+				B2D2840DFD0DC7E106B190C5 /* MacPeopleTools.swift in Sources */,
+				C5F043A0BF42511A67CC3D86 /* MacPhotosBackup.swift in Sources */,
+				3D213EBE3875CC716D7DDC40 /* MacPlatform.swift in Sources */,
+				EB9576135989A36B7BCE1AD3 /* MacSmartAlbums.swift in Sources */,
+				75882CF95B767024BA111391 /* MacTests.swift in Sources */,
+				B754780D115F8AB503436206 /* MacTransferStore.swift in Sources */,
+				32E7586B2096FCE55123BB6D /* MacViews.swift in Sources */,
+				0411B6EE788059AAE71749D8 /* MacWidgets.swift in Sources */,
+				585AEF5D0E5D469E7443A35A /* PhotoLibrary.swift in Sources */,
+				D3501E9B0DB4C6F5FF4299E9 /* WidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F78DBF03870A39C73B482097 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0FFA9CA54CF1871E29ED0A4A /* ConnectionResolver.swift in Sources */,
+				4445AB5A2EC7E7067FA5C1F1 /* DSMClient.swift in Sources */,
+				29ED5963D3EB794A29F9CAFA /* LibraryCache.swift in Sources */,
+				5E555413E1446171FA120EED /* MacAlbumEditor.swift in Sources */,
+				5D4C0E319381C8315DB9AB2B /* MacApp.swift in Sources */,
+				7067D1A5D36D356BC8551D15 /* MacBackground.swift in Sources */,
+				8662D78251D569ACBFDC6F2E /* MacBackupQueue.swift in Sources */,
+				2E0F0E2802782AE4976D532F /* MacExport.swift in Sources */,
+				E9401B141EEBEBCFF67F0D78 /* MacLibraryTools.swift in Sources */,
+				6F42E42C826B64C0BF98766B /* MacLocalPhotos.swift in Sources */,
+				C713445AD380C75E9AFF5CE8 /* MacModel.swift in Sources */,
+				9A991101C6806516329D280E /* MacOffline.swift in Sources */,
+				6B77F2C152E70A14ED7EE134 /* MacPeopleTools.swift in Sources */,
+				19D33149A330375C4A51B01D /* MacPhotosBackup.swift in Sources */,
+				47ECEB150B9A346AA1D88A8B /* MacPlatform.swift in Sources */,
+				D5063DD5C2AA326BC1807460 /* MacSmartAlbums.swift in Sources */,
+				BD86D72B7083F01CB9A12D13 /* MacTransferStore.swift in Sources */,
+				B3D97DD4E7C3E9C3B946B493 /* MacViews.swift in Sources */,
+				54B06D3E040AD50F9673473F /* MacWidgets.swift in Sources */,
+				6B71FB253B83F5CF1DF80734 /* PhotoLibrary.swift in Sources */,
+				F96A76DD3E5B7F5328458901 /* WidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		2AFAE9715F53DD17AD69F9CE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 982850BB0C49738EB07FF34F /* FoteraMac */;
+			targetProxy = 0761DC2E771FC6DD24D2A940 /* PBXContainerItemProxy */;
+		};
+		2B8882B773F2FA65DCDC7B3E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D95674B1BE6F7D53DFC0BD93 /* FoteraMacWidget */;
+			targetProxy = F7ECD76347B4D1A60600851B /* PBXContainerItemProxy */;
+		};
+		F98AA9A5FC397C272171016D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 982850BB0C49738EB07FF34F /* FoteraMac */;
+			targetProxy = 7899371E789DB11B830299B6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		034F295A12AB8421C8B84279 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.LogicTests;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG MAC_LOGIC_TESTS";
+				TEST_HOST = "";
+			};
+			name = Debug;
+		};
+		11AE425E65101B71FABB90EF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widget.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WidgetInfo.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.Widget;
+				PRODUCT_NAME = FoteraMacWidget;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		3ADB535550028276358AB7FB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.LogicTests;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG MAC_LOGIC_TESTS";
+				TEST_HOST = "";
+			};
+			name = Release;
+		};
+		4F78F4392B62ABF413F42288 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = MacIcon;
+				CODE_SIGN_ENTITLEMENTS = Fotera.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac;
+				PRODUCT_MODULE_NAME = FoteraMac;
+				PRODUCT_NAME = Fotera;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		5989F196958CB7EBE3DD9635 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		6C1A7142AA16F67E792902F1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.Tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Fotera.app/Contents/MacOS/Fotera";
+			};
+			name = Release;
+		};
+		89B2CA5940DA448098347444 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.UITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = FoteraMac;
+			};
+			name = Debug;
+		};
+		AEB181F1032789080FAF3480 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.UITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = FoteraMac;
+			};
+			name = Release;
+		};
+		B78E3A7EC640747CDEC68617 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.Tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Fotera.app/Contents/MacOS/Fotera";
+			};
+			name = Debug;
+		};
+		BB200CB28F986014B9A3D33D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = MacIcon;
+				CODE_SIGN_ENTITLEMENTS = Fotera.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac;
+				PRODUCT_MODULE_NAME = FoteraMac;
+				PRODUCT_NAME = Fotera;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		CBEFFCAC402CA09239FD4475 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widget.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WidgetInfo.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = net.jwalter.Fotera.Mac.Widget;
+				PRODUCT_NAME = FoteraMacWidget;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		D0F4C86DF24B87EFF6E79C23 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 76BJCJ4Q7X;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0A515C31B12116004BCE330C /* Build configuration list for PBXNativeTarget "FoteraMacLogicTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				034F295A12AB8421C8B84279 /* Debug */,
+				3ADB535550028276358AB7FB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		22B5E26E46F2F4512466E737 /* Build configuration list for PBXNativeTarget "FoteraMacWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				11AE425E65101B71FABB90EF /* Debug */,
+				CBEFFCAC402CA09239FD4475 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		490D6B554754B5CCF301DFBF /* Build configuration list for PBXNativeTarget "FoteraMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B78E3A7EC640747CDEC68617 /* Debug */,
+				6C1A7142AA16F67E792902F1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7706FEEC78CB18D2F20F22C2 /* Build configuration list for PBXNativeTarget "FoteraMacUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				89B2CA5940DA448098347444 /* Debug */,
+				AEB181F1032789080FAF3480 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9FDF6BB56D693ADBA492DE2D /* Build configuration list for PBXNativeTarget "FoteraMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB200CB28F986014B9A3D33D /* Debug */,
+				4F78F4392B62ABF413F42288 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B4186309817913858D7F8B6A /* Build configuration list for PBXProject "FoteraMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D0F4C86DF24B87EFF6E79C23 /* Debug */,
+				5989F196958CB7EBE3DD9635 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8D5100ECF9DBFA4B306AF5A5 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.19;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BB9E33FA5CCBCB8819D8884B /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8D5100ECF9DBFA4B306AF5A5 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+		BD76E49A4D79BBD2D55CC162 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8D5100ECF9DBFA4B306AF5A5 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = CFEA2F1F76CB3A6505289779 /* Project object */;
+}

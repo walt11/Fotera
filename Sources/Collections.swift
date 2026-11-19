@@ -6,86 +6,63 @@ import MapKit
 struct LibraryTab: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject var library: LibraryStore
-    @State private var albums: [RemoteAlbum] = []
-    @State private var loading = false
-    @State private var failure: String?
-    @State private var creating = false
     @State private var destination: Destination?
     @State private var sharedCount: Int?
+    @State private var discoveryRefresh = 0
     @ObservedObject private var favorites = FavoriteMarks.shared
-    @AppStorage("albumSort") private var sort = "recent"
     enum Destination: String, Identifiable { case recent, duplicates, smart, offline, folders, trash, upload; var id: String { rawValue } }
     var body: some View {
         NavigationStack {
             ScrollView {
-                HStack(spacing: Theme.medium) {
-                    let favoritePhotos = library.favorites(favorites.ids)
-                    coverTile("Favorites", count: favoritePhotos.count, cover: favoritePhotos.first(where: { !$0.isVideo }) ?? favoritePhotos.first) {
-                        CollectionScreen(title: "Favorites", source: .filter(.favorites), unfavorite: true)
-                    }
-                    coverTile("Videos", count: library.videos.count, cover: library.videos.first) {
-                        LocalCollectionScreen(title: "Videos", items: library.videos)
-                    }
-                    coverTile("Shared", count: sharedCount, cover: nil) { SharedWithMeView() }
-                }
-                .padding(.horizontal, Theme.gutter).padding(.top, 4)
-                // Tools that used to hide in the ⋯ menu, reachable in one tap.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        utility("Recently deleted", "trash", .trash)
-                        utility("Recently added", "clock", .recent)
-                        utility("Duplicates", "square.on.square", .duplicates)
-                        utility("Folders", "folder", .folders)
-                        utility("Upload to NAS", "square.and.arrow.up", .upload)
-                    }
-                    .padding(.horizontal, Theme.gutter)
-                }
-                .padding(.top, Theme.medium)
-                HStack {
-                    Text("Albums").font(.title3.bold())
-                    Spacer()
-                    Menu {
-                        Button("Recently added", systemImage: "clock") { destination = .recent }
-                        Button("Duplicates", systemImage: "square.on.square") { destination = .duplicates }
-                        Button("Smart albums", systemImage: "sparkles.rectangle.stack") { destination = .smart }
-                        Button("Offline albums", systemImage: "arrow.down.circle") { destination = .offline }
-                        Button("Folders", systemImage: "folder") { destination = .folders }
-                        Button("Recently deleted", systemImage: "trash") { destination = .trash }
-                        Button("Upload to NAS", systemImage: "square.and.arrow.up") { destination = .upload }
-                    } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("More collections").padding(.trailing, 12)
-                    Menu {
-                        Picker("Sort", selection: $sort) {
-                            Text("Recently created").tag("recent")
-                            Text("Name").tag("name")
-                            Text("Most items").tag("count")
+                VStack(alignment: .leading, spacing: 28) {
+                    HStack(spacing: 14) {
+                        let favoritePhotos = library.favorites(favorites.ids)
+                        coverTile("Favorites", icon: "heart.fill", count: favoritePhotos.count,
+                                  cover: favoritePhotos.first(where: { !$0.isVideo }) ?? favoritePhotos.first) {
+                            CollectionScreen(title: "Favorites", source: .filter(.favorites), unfavorite: true)
                         }
-                    } label: { Image(systemName: "arrow.up.arrow.down") }.accessibilityLabel("Sort albums")
-                    Button { creating = true } label: { Image(systemName: "plus") }.accessibilityLabel("New album").padding(.leading, 12)
-                }
-                .padding(.horizontal, Theme.gutter).padding(.top, 20)
-                if app.shared {
-                    Text("Albums belong to your Personal Space.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
-                }
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: Theme.medium), GridItem(.flexible(), spacing: Theme.medium)], spacing: Theme.medium) {
-                    ForEach(sortedAlbums) { album in
-                        NavigationLink { AlbumDetailView(album: album) } label: { AlbumCard(album: album) }.buttonStyle(.plain)
-                    }
-                }
-                .padding(Theme.gutter)
-                // Placeholders live in their own grid: sharing a lazy grid with album IDs reused their views.
-                if loading && albums.isEmpty {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: Theme.medium), GridItem(.flexible(), spacing: Theme.medium)], spacing: Theme.medium) {
-                        ForEach(0..<4, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: Theme.radius).fill(Color(.secondarySystemFill)).aspectRatio(0.8, contentMode: .fit)
+                        coverTile("Videos", icon: "play.rectangle.fill", count: library.videos.count, cover: library.videos.first) {
+                            LocalCollectionScreen(title: "Videos", items: library.videos)
                         }
                     }
-                    .padding(.horizontal, Theme.gutter)
+                    LibraryDiscoveryView(library: library, refresh: discoveryRefresh)
+                        .padding(.horizontal, -Theme.gutter)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Collections").font(.title2.bold())
+                        VStack(spacing: 0) {
+                            utility("Recently added", "clock", .recent)
+                            rowDivider
+                            NavigationLink { OfflineLibrarySearchView(library: library) } label: {
+                                collectionRow("Search on this iPhone", icon: "iphone")
+                            }.buttonStyle(.plain)
+                            rowDivider
+                            NavigationLink { SharedWithMeView() } label: {
+                                collectionRow("Shared with me", icon: "person.2", count: sharedCount)
+                            }.buttonStyle(.plain)
+                            rowDivider
+                            utility("Folders", "folder", .folders)
+                            rowDivider
+                            utility("Smart albums", "sparkles.rectangle.stack", .smart)
+                            rowDivider
+                            utility("Offline albums", "arrow.down.circle", .offline)
+                        }
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Utilities").font(.title2.bold())
+                        VStack(spacing: 0) {
+                            utility("Upload to NAS", "square.and.arrow.up", .upload)
+                            rowDivider
+                            utility("Duplicates", "square.on.square", .duplicates)
+                            rowDivider
+                            utility("Recently deleted", "trash", .trash)
+                        }
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                    }
                 }
-                if let failure { Text(failure).font(.footnote).foregroundStyle(.secondary).padding() }
-                if !loading && albums.isEmpty && failure == nil {
-                    Text("No albums yet. Select photos and choose Add to album, or tap +.").font(.footnote).foregroundStyle(.secondary).padding()
-                }
+                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 28)
             }
+            .modifier(LibrarySearch(library: library))
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .principal) { FoteraBrand(page: "Library") } }
@@ -100,9 +77,140 @@ struct LibraryTab: View {
                 case .upload: TransfersView(queue: app.manualUploads)
                 }
             }
+            .refreshable { discoveryRefresh += 1; await load() }
+            .refreshWhileActive(key: app.account + "|" + String(app.shared)) { await load() }
+            .onReceive(NotificationCenter.default.publisher(for: .foteraAlbumsChanged)) { _ in Task { await load() } }
+
+        }
+    }
+    private func load() async {
+        guard let client = app.client else { return }
+        let count = try? await client.sharedWithMe().count
+        guard !Task.isCancelled, app.client === client else { return }
+        sharedCount = count
+    }
+    private var rowDivider: some View { Divider().padding(.leading, 54) }
+    private func collectionRow(_ title: String, icon: String, count: Int? = nil) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 19, weight: .regular))
+                .foregroundStyle(Color.accentColor).frame(width: 24)
+            Text(title).font(.body).foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            if let count { Text(count.formatted()).font(.subheadline).foregroundStyle(.secondary) }
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 15)
+        .frame(minHeight: 52).contentShape(Rectangle())
+    }
+    private func utility(_ title: String, _ icon: String, _ target: Destination) -> some View {
+        Button { destination = target } label: { collectionRow(title, icon: icon) }.buttonStyle(.plain)
+    }
+    private func coverTile<Content: View>(_ title: String, icon: String, count: Int?, cover: RemotePhoto?,
+                                         @ViewBuilder destination: @escaping () -> Content) -> some View {
+        NavigationLink(destination: destination) {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack {
+                    Color(.secondarySystemBackground)
+                    if let cover {
+                        ThumbnailView(source: cover.thumbnailSource, shared: app.shared, size: .m, fallbackPhoto: cover)
+                    } else {
+                        Image(systemName: icon).font(.system(size: 32, weight: .light)).foregroundStyle(Color.accentColor)
+                    }
+                }
+                .aspectRatio(1.22, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                HStack(alignment: .firstTextBaseline) {
+                    Text(title).font(.headline)
+                    Spacer(minLength: 4)
+                    if let count { Text(count.formatted()).font(.subheadline).foregroundStyle(.secondary) }
+                }
+            }.foregroundStyle(.primary).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(count.map { "\(title), \($0) items" } ?? title)
+    }
+}
+
+struct AlbumsTab: View {
+    @EnvironmentObject private var app: AppModel
+    @State private var albums: [RemoteAlbum] = []
+    @State private var loading = false
+    @State private var reloadRequested = false
+    @State private var failure: String?
+    @State private var creating = false
+    @AppStorage("albumSort") private var sort = "recent"
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(spacing: 16) {
+                        NavigationLink { SharedWithMeView() } label: { Label("Shared", systemImage: "person.2") }
+                        Spacer()
+                        Menu {
+                            NavigationLink("Smart albums") { SmartAlbumsView() }
+                            NavigationLink("Offline albums") { OfflineAlbumsView() }
+                        } label: { Label("More", systemImage: "ellipsis.circle") }
+                    }
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Text("Albums").font(.title2.bold())
+                            Spacer()
+                            Menu {
+                                Picker("Sort albums", selection: $sort) {
+                                    Text("Recently created").tag("recent")
+                                    Text("Name").tag("name")
+                                    Text("Most items").tag("count")
+                                }
+                            } label: {
+                                Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
+                            }.accessibilityLabel("Sort albums")
+                            Button { creating = true } label: {
+                                Image(systemName: "plus").frame(width: 44, height: 44)
+                                    .background(Color.accentColor.opacity(0.10), in: Circle())
+                            }.accessibilityLabel("New album")
+                        }
+                        if app.shared {
+                            Text("Albums are in Personal Space").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        if loading && albums.isEmpty {
+                            LazyVGrid(columns: albumColumns, spacing: 16) {
+                                ForEach(0..<2, id: \.self) { _ in
+                                    RoundedRectangle(cornerRadius: 18).fill(Color(.secondarySystemFill))
+                                        .aspectRatio(1, contentMode: .fit)
+                                }
+                            }
+                        } else if !albums.isEmpty {
+                            LazyVGrid(columns: albumColumns, alignment: .leading, spacing: 22) {
+                                ForEach(sortedAlbums) { album in
+                                    NavigationLink { AlbumDetailView(album: album) } label: { AlbumCard(album: album) }
+                                        .buttonStyle(.plain)
+                                }
+                            }
+                        } else if failure == nil {
+                            Button { creating = true } label: {
+                                VStack(spacing: 10) {
+                                    Image(systemName: "rectangle.stack.badge.plus").font(.system(size: 30, weight: .light))
+                                    Text("Create your first album").font(.subheadline.weight(.semibold))
+                                }
+                                .frame(maxWidth: .infinity).padding(.vertical, 30)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                            }.buttonStyle(.plain)
+                        }
+                        if let failure {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(failure).font(.footnote).foregroundStyle(.secondary)
+                                Button("Try again") { Task { await load() } }
+                            }
+                        }
+                    }
+
+                }.padding(20)
+            }
+            .navigationTitle("Albums")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .principal) { FoteraBrand(page: "Albums") } }
             .refreshable { await load() }
-            .task { if albums.isEmpty { await load() } }
-            .task(id: app.shared) { sharedCount = (try? await app.client?.sharedWithMe())?.count }
+            .refreshWhileActive(key: app.account) { await load() }
             .onReceive(NotificationCenter.default.publisher(for: .foteraAlbumsChanged)) { _ in Task { await load() } }
             .sheet(isPresented: $creating) {
                 PhotoSelectionSheet(title: "New album", confirmTitle: "Next", asksForName: true) { ids, name in
@@ -121,68 +229,51 @@ struct LibraryTab: View {
         }
     }
     private func load() async {
-        guard let client = app.client, !loading else { return }
+        #if DEBUG
+        if StoreScreenshots.enabled { albums = StoreScreenshots.albums; return }
+        #endif
+        guard let client = app.client else {return}
+        guard !loading else {reloadRequested = true; return}
         loading = true; failure = nil
-        defer { loading = false }
-        do { albums = try await client.allAlbums() }
-        catch { if !isCancelledRequest(error) { failure = error.localizedDescription } }
-    }
-    private func utility(_ title: String, _ icon: String, _ target: Destination) -> some View {
-        Button { destination = target } label: {
-            Label(title, systemImage: icon).font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground), in: Capsule())
+        defer {
+            loading = false
+            if reloadRequested {reloadRequested = false; Task {await load()}}
         }
-        .buttonStyle(.plain)
-    }
-    /// A photo-cover card like an album. Collections without a cover photo use a plain card.
-    private func coverTile<Content: View>(_ title: String, count: Int?, cover: RemotePhoto?, @ViewBuilder destination: @escaping () -> Content) -> some View {
-        NavigationLink(destination: destination) {
-            ZStack(alignment: .bottomLeading) {
-                if let cover {
-                    ThumbnailView(source: cover.thumbnailSource, shared: app.shared, size: .m, fallbackPhoto: cover)
-                } else {
-                    Color(.secondarySystemBackground)
-                }
-                LinearGradient(colors: [.clear, .black.opacity(cover == nil ? 0.15 : 0.6)], startPoint: .center, endPoint: .bottom)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.subheadline.weight(.semibold))
-                    if let count { Text(count.formatted()).font(.caption2).opacity(0.85) }
-                }
-                .foregroundStyle(cover == nil ? Color.primary : Color.white)
-                .padding(10)
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        do {
+            let fresh = try await client.allAlbums()
+            guard !Task.isCancelled, app.client === client else { return }
+            albums = fresh
+
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(count.map { "\(title), \($0) items" } ?? title)
+        catch { if !isCancelledRequest(error), app.client === client { failure = error.localizedDescription } }
+    }
+    private var albumColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 150), spacing: 14, alignment: .top)]
     }
 }
 
 struct AlbumCard: View {
     let album: RemoteAlbum
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            ThumbnailView(source: album.cover, shared: false, size: .m)
-            if album.cover == nil {
-                Image(systemName: "rectangle.stack").font(.largeTitle).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                Color(.secondarySystemBackground)
+                if album.cover != nil {
+                    ThumbnailView(source: album.cover, shared: false, size: .m)
+                } else {
+                    Image(systemName: "rectangle.stack").font(.system(size: 32, weight: .light)).foregroundStyle(.secondary)
+                }
             }
-            LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(album.name).font(.headline).lineLimit(2)
-                HStack(spacing: 4) {
-                    if let count = album.item_count { Text("\(count) \(count == 1 ? "item" : "items")") }
-                    if album.shared == true { Image(systemName: "link") }
-                }.font(.caption).opacity(0.85)
-            }
-            .foregroundStyle(.white).padding(Theme.medium)
+            .aspectRatio(1, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Text(album.name).font(.headline).foregroundStyle(.primary).lineLimit(2)
+            HStack(spacing: 6) {
+                if let count = album.item_count { Text(count.formatted()) }
+                if album.shared == true { Image(systemName: "link").accessibilityLabel("Shared album") }
+            }.font(.subheadline).foregroundStyle(.secondary)
         }
-        .aspectRatio(0.8, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 }
@@ -229,7 +320,7 @@ struct AlbumDetailView: View {
                         Button("Select", systemImage: "checkmark.circle") { selection = [] }
                         Button("Add photos", systemImage: "plus") { adding = true }
                         NavigationLink("Album widget") { CollectionWidgetSetup(source: .album(album.id), title: album.name, shared: false) }
-                        Button("Share link", systemImage: "link") { sharing = true }
+                        Button("Share album", systemImage: "person.badge.plus") { sharing = true }
                         Button("Rename", systemImage: "pencil") { newName = album.name; renaming = true }
                         Button("Delete album", systemImage: "trash", role: .destructive) { deleting = true }
                     } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("Album options")
@@ -482,6 +573,11 @@ struct AlbumSharingView: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var state: AlbumSharingState?
+    @State private var users: [AlbumShareMember] = []
+    @State private var memberFailure: String?
+    @State private var inviting = false
+    @State private var selectedUser: Int?
+    @State private var memberRole = AlbumShareRole.view
     @State private var role = "view"
     @State private var password = ""
     @State private var expires = false
@@ -489,52 +585,158 @@ struct AlbumSharingView: View {
     @State private var confirming = false
     @State private var stopping = false
     @State private var busy = false
+    @State private var sharingRevision = 0
     @State private var failure: String?
-    private var isShared: Bool { state?.shared == true }
+    private var publicEnabled: Bool { state?.shared == true && state?.additional?.sharing_info?.privacy_type?.hasPrefix("public-") == true }
+    private var permissions: [AlbumSharePermission] {
+        guard state?.shared == true else { return [] }
+        return state?.additional?.sharing_info?.permission?.filter { $0.member.type == "user" && $0.role != "owner" } ?? []
+    }
+    private var availableUsers: [AlbumShareMember] {
+        users.filter { user in !permissions.contains { $0.member.id == user.id } && user.name != app.username }
+    }
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    if let link = state?.additional?.sharing_info?.sharing_link, let url = URL(string: link), url.scheme == "https", isShared {
+                    ForEach(permissions.indices, id: \.self) { index in
+                        let permission = permissions[index]
+                        let user = users.first { $0.id == permission.member.id }
+                        HStack {
+                            Label(user?.name ?? permission.member.name ?? "User", systemImage: "person.crop.circle")
+                            Spacer()
+                            if let user {
+                                Menu {
+                                    ForEach(AlbumShareRole.allCases) { access in
+                                        Button(access.title) { Task { await updateMember(user, role: access) } }
+                                    }
+                                    Button("Remove access", role: .destructive) { Task { await updateMember(user, role: nil) } }
+                                } label: {
+                                    Text(AlbumShareRole(rawValue: permission.role)?.title ?? permission.role).font(.subheadline)
+                                }
+                                .accessibilityLabel("Access for \(user.name)")
+                            } else { Text(permission.role).font(.subheadline).foregroundStyle(.secondary) }
+                        }
+                    }
+                    Button { selectedUser = availableUsers.first?.id; inviting = true } label: {
+                        Label("Add people", systemImage: "person.badge.plus")
+                    }.disabled(state == nil || availableUsers.isEmpty)
+                    if let memberFailure {
+                        Text(memberFailure).font(.footnote).foregroundStyle(.secondary)
+                        Button("Retry loading users") { Task { await load() } }
+                    } else if state != nil && availableUsers.isEmpty && permissions.isEmpty {
+                        Text("No other NAS users available.").foregroundStyle(.secondary)
+                    }
+                } header: { Text("People with access") } footer: {
+                    Text("Invited users can find this album in Shared with me.")
+                }
+                Section {
+                    if let link = state?.additional?.sharing_info?.sharing_link,
+                       let url = URL(string: link), ["https", "http"].contains(url.scheme ?? ""), publicEnabled {
                         ShareLink(item: url) { Label("Share link", systemImage: "square.and.arrow.up") }
                         Button { UIPasteboard.general.url = url } label: { Label("Copy link", systemImage: "doc.on.doc") }
-                        Text(link).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     } else if state != nil {
-                        Text("This album isn’t shared by link.").foregroundStyle(.secondary)
+                        Text("Link sharing is off").foregroundStyle(.secondary)
                     } else if failure == nil { ProgressView() }
-                } header: { Text("Public link") }
-                Section {
                     Picker("Access", selection: $role) { Text("View").tag("view"); Text("View and download").tag("download") }
                     SecureField("Password (optional)", text: $password)
                     Toggle("Expires", isOn: $expires)
                     if expires { DatePicker("Expires on", selection: $expiration, in: Date()..., displayedComponents: [.date]) }
-                    Button(isShared ? "Update link" : "Create link") { confirming = true }.disabled(state == nil)
-                    if isShared { Button("Stop sharing", role: .destructive) { stopping = true } }
-                } footer: { Text("Anyone with the link can see this album. Leaving the password blank removes any existing password.") }
+                    Button(publicEnabled ? "Update link" : "Create link") { confirming = true }.disabled(state == nil)
+                    if publicEnabled { Button("Turn off link", role: .destructive) { stopping = true } }
+                } header: { Text("Share a link") } footer: {
+                    Text("Anyone with the link can access the album. A blank password removes existing password protection.")
+                }
                 if let failure { Section { Text(failure).foregroundStyle(.red) } }
             }
             .disabled(busy)
             .overlay { if busy { ProgressView() } }
-            .navigationTitle("Share “\(album.name)”").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Share album").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() } }
-            .task {
-                guard let client = app.client else { return }
-                do {
-                    state = try await client.albumSharing(id: album.id)
-                    if state?.additional?.sharing_info?.privacy_type == "public-download" { role = "download" }
-                    if let expiry = state?.additional?.sharing_info?.expiration, expiry > 0 { expires = true; expiration = Date(timeIntervalSince1970: expiry) }
-                } catch { failure = error.localizedDescription }
+            .task { await load() }
+            .refreshWhileActive(key: app.account + "|album-sharing|" + String(album.id)) {
+                await refreshSharingState()
             }
-            .confirmationDialog("Anyone with the link will be able to access this album.", isPresented: $confirming, titleVisibility: .visible) {
-                Button(isShared ? "Update link" : "Create link") { Task { await update(enabled: true) } }
+            .refreshable { await refreshSharingState() }
+            .confirmationDialog("Anyone with the link can access this album.", isPresented: $confirming, titleVisibility: .visible) {
+                Button(publicEnabled ? "Update link" : "Create link") { Task { await update(enabled: true) } }
             }
-            .confirmationDialog("Stop sharing? Existing links will stop working.", isPresented: $stopping, titleVisibility: .visible) {
-                Button("Stop sharing", role: .destructive) { Task { await update(enabled: false) } }
+            .confirmationDialog("Turn off this link? Invited users keep access.", isPresented: $stopping, titleVisibility: .visible) {
+                Button("Turn off link", role: .destructive) { Task { await update(enabled: false) } }
             }
+            .sheet(isPresented: $inviting) {
+                NavigationStack {
+                    Form {
+                        Section {
+                            Picker("User", selection: $selectedUser) {
+                                ForEach(availableUsers) { user in Text(user.name).tag(Optional(user.id)) }
+                            }
+                            Picker("Access", selection: $memberRole) {
+                                ForEach(AlbumShareRole.allCases) { access in Text(access.title).tag(access) }
+                            }
+                        } footer: { Text("Contributors can add photos to this album.") }
+                        if let failure { Text(failure).foregroundStyle(.red) }
+                    }
+                    .disabled(busy)
+                    .navigationTitle("Add people").navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { inviting = false }.disabled(busy) }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Share") {
+                                guard let user = availableUsers.first(where: { $0.id == selectedUser }) else { return }
+                                Task { await updateMember(user, role: memberRole) }
+                            }.disabled(busy || selectedUser == nil)
+                        }
+                    }
+                }.presentationDetents([.medium, .large])
+            }
+        }
+    }
+    private func load() async {
+        guard let client = app.client else { return }
+        sharingRevision += 1
+        busy = true; failure = nil; memberFailure = nil
+        defer { busy = false }
+        do {
+            state = try await client.albumSharing(id: album.id)
+            role = state?.additional?.sharing_info?.privacy_type == "public-download" ? "download" : "view"
+            let expiry = state?.additional?.sharing_info?.expiration ?? 0
+            expires = expiry > 0
+            if expires { expiration = Date(timeIntervalSince1970: expiry) }
+        } catch { failure = error.localizedDescription }
+        do { users = try await client.albumSharingMembers() }
+        catch { memberFailure = "Couldn’t load NAS users. " + error.localizedDescription }
+    }
+    private func refreshSharingState() async {
+        guard let client = app.client, !busy else { return }
+        let revision = sharingRevision
+        do {
+            let fresh = try await client.albumSharing(id: album.id)
+            guard !Task.isCancelled, app.client === client, !busy, revision == sharingRevision else { return }
+            state = fresh
+            // Leave unsaved password, expiry and access choices intact.
+            failure = nil
+        } catch {
+            if !isCancelledRequest(error), app.client === client { failure = error.localizedDescription }
+        }
+    }
+    private func updateMember(_ user: AlbumShareMember, role: AlbumShareRole?) async {
+        guard let client = app.client else { return }
+        sharingRevision += 1
+        busy = true; failure = nil
+        defer { busy = false }
+        do {
+            state = try await client.updateAlbumMember(id: album.id, member: user, role: role)
+            inviting = false
+            NotificationCenter.default.post(name: .foteraAlbumsChanged, object: nil)
+        } catch {
+            failure = "Couldn’t confirm access. " + error.localizedDescription
+            state = try? await client.albumSharing(id: album.id)
         }
     }
     private func update(enabled: Bool) async {
         guard let client = app.client else { return }
+        sharingRevision += 1
         busy = true; failure = nil
         defer { busy = false }
         do {
@@ -550,7 +752,7 @@ struct AlbumSharingView: View {
 
 // MARK: - Search & explore
 
-struct SearchTab: View {
+private struct LibrarySearch: ViewModifier {
     @EnvironmentObject private var app: AppModel
     @ObservedObject var library: LibraryStore
     @State private var query = ""
@@ -567,22 +769,18 @@ struct SearchTab: View {
         var id: String { kind + String(group.id) }
     }
     private var recents: [String] { (try? JSONDecoder().decode([String].self, from: recentData)) ?? [] }
-    var body: some View {
-        NavigationStack {
-            Group {
-                if submitted.isEmpty { explore } else { CollectionScreen(title: submitted, source: .search(submitted)).id(submitted) }
-            }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .principal) { FoteraBrand(page: "Search") } }
-            .searchable(text: $query, prompt: "People, places, things, files")
-            .searchSuggestions { suggestions }
-            .onSubmit(of: .search) { submit(query) }
-            .onChange(of: query) { if query.isEmpty { submitted = "" } }
-            .navigationDestination(item: $openedGroup) { opened in groupScreen(opened.group, kind: opened.kind) }
-            .task(id: app.shared) { await load() }
-            .onReceive(NotificationCenter.default.publisher(for: .foteraPeopleChanged)) { _ in Task { await load(force: true) } }
+    func body(content: Content) -> some View {
+        Group {
+            if submitted.isEmpty { content }
+            else { CollectionScreen(title: submitted, source: .search(submitted)).id(submitted) }
         }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "People, places, things, files")
+        .searchSuggestions { suggestions }
+        .onSubmit(of: .search) { submit(query) }
+        .onChange(of: query) { if query.isEmpty { submitted = "" } }
+        .navigationDestination(item: $openedGroup) { opened in groupScreen(opened.group, kind: opened.kind) }
+        .task(id: app.account + "|" + String(app.shared)) { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .foteraPeopleChanged)) { _ in Task { await load(force: true) } }
     }
     /// As you type: matching people, places and things, then recent searches, like Immich.
     @ViewBuilder private var suggestions: some View {
@@ -596,10 +794,12 @@ struct SearchTab: View {
                 people.filter { !$0.name.isEmpty && $0.name.localizedCaseInsensitiveContains(text) }.prefix(4).map { ($0, "person", "person.crop.circle") } +
                 places.filter { $0.name.localizedCaseInsensitiveContains(text) }.prefix(4).map { ($0, "place", "mappin.circle") } +
                 things.filter { $0.name.localizedCaseInsensitiveContains(text) }.prefix(4).map { ($0, "thing", "tag.circle") }
-            ForEach(matching, id: \.0.id) { group, kind, icon in
+            ForEach(matching.map { OpenedGroup(group: $0.0, kind: $0.1) }) { suggestion in
+                let group = suggestion.group, kind = suggestion.kind
+                let icon = kind == "person" ? "person.crop.circle" : (kind == "place" ? "mappin.circle" : "tag.circle")
                 Button { openedGroup = OpenedGroup(group: group, kind: kind) } label: {
                     HStack(spacing: 12) {
-                        ThumbnailView(source: group.cover(kind: kind == "person" ? "person" : "unit"), shared: app.shared, size: .sm)
+                        ThumbnailView(source: group.cover(kind: kind == "person" ? "person" : "unit"), shared: app.shared, size: .sm, fallbackGroup: kind == "person" ? nil : GroupPreviewSource(group: group, kind: kind))
                             .frame(width: 32, height: 32).clipShape(kind == "person" ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 6)))
                         Label(displayName(group, kind: kind), systemImage: icon).labelStyle(.titleOnly).foregroundStyle(.primary)
                         Spacer()
@@ -617,8 +817,26 @@ struct SearchTab: View {
         let updated = [value] + recents.filter { $0.caseInsensitiveCompare(value) != .orderedSame }
         recentData = (try? JSONEncoder().encode(Array(updated.prefix(8)))) ?? Data()
     }
-    private var explore: some View {
-        ScrollView {
+    private func load(force: Bool = false) async {
+        guard let client = app.client else { return }
+        let account = app.account, space = app.shared
+        let groups = await DiscoveryCatalog.load(client: client, account: account, shared: space, force: force)
+        guard !Task.isCancelled, app.account == account, app.shared == space else { return }
+        people = groups.people; places = groups.places; things = groups.things; loaded = true
+    }
+
+}
+/// Browsing belongs in Library; Search reuses the same metadata for typed suggestions.
+private struct LibraryDiscoveryView: View {
+    @EnvironmentObject private var app: AppModel
+    @ObservedObject var library: LibraryStore
+    let refresh: Int
+    @State private var people: [RemoteGroup] = []
+    @State private var places: [RemoteGroup] = []
+    @State private var things: [RemoteGroup] = []
+    @State private var loaded = false
+    var body: some View {
+        Group {
             VStack(alignment: .leading, spacing: 24) {
                 if !people.isEmpty {
                     header("People") { GroupListView(title: "People", groups: people, kind: "person") }
@@ -647,9 +865,9 @@ struct SearchTab: View {
                 VStack(spacing: 0) {
                     if !library.located.isEmpty {
                         browseRow("Map", "map", subtitle: "\(library.located.count.formatted()) photos with locations") { PhotoMapView(photos: library.located) }
-                        Divider().padding(.leading, 52)
+
                     }
-                    browseRow("On this iPhone", "iphone", subtitle: "Search the saved library, even offline") { OfflineLibrarySearchView(library: library) }
+
                 }
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                 .padding(.horizontal, Theme.gutter)
@@ -658,12 +876,13 @@ struct SearchTab: View {
                         ForEach(0..<4, id: \.self) { _ in Circle().fill(Color(.secondarySystemFill)).frame(width: 80, height: 80) }
                     }.padding(.horizontal, Theme.gutter)
                 } else if people.isEmpty && places.isEmpty && things.isEmpty {
-                    ContentUnavailableView("Search your library", systemImage: "magnifyingglass",
-                        description: Text("Search by filename, tag, place or thing. People and places appear once Synology Photos indexes them."))
+                    Text("People, places and things appear here once Synology Photos indexes them.")
+                        .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, Theme.gutter)
                 }
             }.padding(.vertical, 8)
         }
-        .refreshable { await load(force: true) }
+        .task(id: app.account + "|" + String(app.shared) + "|" + String(refresh)) { await load(force: refresh > 0) }
+        .onReceive(NotificationCenter.default.publisher(for: .foteraPeopleChanged)) { _ in Task { await load(force: true) } }
     }
     private func header<Destination: View>(_ title: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
         NavigationLink(destination: destination) {
@@ -702,23 +921,50 @@ struct SearchTab: View {
             }.padding(.horizontal, Theme.gutter)
         }
     }
-    /// People, places and things change rarely; reuse them for 5 minutes per space unless pulled to refresh.
-    private static var cache: [Bool: (date: Date, people: [RemoteGroup], places: [RemoteGroup], things: [RemoteGroup])] = [:]
     private func load(force: Bool = false) async {
-        guard let client = app.client else { return }
-        if !force, let cached = Self.cache[app.shared], Date().timeIntervalSince(cached.date) < 300 {
-            people = cached.people; places = cached.places; things = cached.things; loaded = true; return
+        #if DEBUG
+        if StoreScreenshots.enabled {
+            places = StoreScreenshots.groups("places")
+            things = StoreScreenshots.groups("things")
+            loaded = true
+            return
         }
-        async let people = try? client.people(shared: app.shared)
-        async let places = try? client.places(shared: app.shared)
-        async let things = try? client.concepts(shared: app.shared)
-        self.people = (await people ?? []).filter { ($0.item_count ?? 0) > 0 }
-        self.places = (await places ?? []).sorted { ($0.item_count ?? 0) > ($1.item_count ?? 0) }
-        self.things = (await things ?? []).sorted { ($0.item_count ?? 0) > ($1.item_count ?? 0) }
-        loaded = true
-        Self.cache[app.shared] = (Date(), self.people, self.places, self.things)
+        #endif
+        guard let client = app.client else { return }
+        let account = app.account, space = app.shared
+        let groups = await DiscoveryCatalog.load(client: client, account: account, shared: space, force: force)
+        guard !Task.isCancelled, app.account == account, app.shared == space else { return }
+        people = groups.people; places = groups.places; things = groups.things; loaded = true
     }
 }
+
+@MainActor private enum DiscoveryCatalog {
+    struct Groups {
+        let date: Date
+        let people: [RemoteGroup]
+        let places: [RemoteGroup]
+        let things: [RemoteGroup]
+    }
+    private static var cache: [String: Groups] = [:]
+    static func load(client: DSMClient, account: String, shared: Bool, force: Bool) async -> Groups {
+        let key = account + "|" + String(shared)
+        if !force, let cached = cache[key], Date().timeIntervalSince(cached.date) < 300 { return cached }
+        async let people = try? client.people(shared: shared)
+        async let places = try? client.places(shared: shared)
+        async let things = try? client.concepts(shared: shared)
+        let (freshPeople, freshPlaces, freshThings) = await (people, places, things)
+        let complete = freshPeople != nil && freshPlaces != nil && freshThings != nil
+        let previous = cache[key]
+        let result = Groups(date: complete ? Date() : .distantPast,
+            people: (freshPeople ?? previous?.people ?? []).filter { ($0.item_count ?? 0) > 0 },
+            places: (freshPlaces ?? previous?.places ?? []).sorted { ($0.item_count ?? 0) > ($1.item_count ?? 0) },
+            things: (freshThings ?? previous?.things ?? []).sorted { ($0.item_count ?? 0) > ($1.item_count ?? 0) })
+        // A failed request must not hide a section for the five-minute cache lifetime.
+        if !Task.isCancelled { cache[key] = result }
+        return result
+    }
+}
+
 func displayName(_ group: RemoteGroup, kind: String) -> String {
     group.name.isEmpty ? (kind == "person" ? "Unnamed" : "Unknown") : group.name
 }
@@ -734,7 +980,7 @@ struct GroupCard: View {
     let kind: String
     @EnvironmentObject private var app: AppModel
     var body: some View {
-        ThumbnailView(source: group.cover(kind: kind == "person" ? "person" : "unit"), shared: app.shared, size: .m)
+        ThumbnailView(source: group.cover(kind: kind == "person" ? "person" : "unit"), shared: app.shared, size: .m, fallbackGroup: kind == "person" ? nil : GroupPreviewSource(group: group, kind: kind))
             .overlay(LinearGradient(colors: [.clear, .black.opacity(0.5)], startPoint: .center, endPoint: .bottom))
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -963,20 +1209,128 @@ struct PersonDetailView: View {
     let shared: Bool
     @EnvironmentObject private var app: AppModel
     @State private var editing = false
+    @State private var merging = false
     var body: some View {
         CollectionScreen(title: displayName(person, kind: "person"), source: .filter(.person(person.id)))
-            .toolbar {
-                ToolbarItem(placement: .secondaryAction) {
+            .id(person.id)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 12) {
                     Button(person.name.isEmpty ? "Name person" : "Edit name", systemImage: "pencil") { editing = true }
-                    NavigationLink("Manage person") { PeopleManagementView(person: person, shared: shared) }
-                    NavigationLink("Use in widget") { CollectionWidgetSetup(source: .person(person.id), title: displayName(person, kind: "person"), shared: shared) }
+                    Spacer(minLength: 4)
+                    Button("Merge with…", systemImage: "person.2") { merging = true }
+                        .accessibilityIdentifier("person.merge")
                 }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.bar)
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        NavigationLink("Manage person") { PeopleManagementView(person: person, shared: shared) }
+                        NavigationLink("Use in widget") { CollectionWidgetSetup(source: .person(person.id), title: displayName(person, kind: "person"), shared: shared) }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("Person options")
+                }
+            }
+            .sheet(isPresented: $merging) {
+                PersonMergePicker(source: person, shared: shared) { person = $0 }
             }
             .sheet(isPresented: $editing) {
                 PersonNameEditor(person: person, shared: shared) { person = $0 }
             }
     }
 }
+/// The selected destination keeps its identity and name; the source group disappears.
+struct PersonMergePicker: View {
+    let source: RemoteGroup
+    let shared: Bool
+    let merged: (RemoteGroup) -> Void
+    @EnvironmentObject private var app: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var people: [RemoteGroup] = []
+    @State private var query = ""
+    @State private var target: RemoteGroup?
+    @State private var confirming = false
+    @State private var loading = false
+    @State private var saving = false
+    @State private var failure: String?
+    private var candidates: [RemoteGroup] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return people.filter { $0.id != source.id && (text.isEmpty || displayName($0, kind: "person").localizedCaseInsensitiveContains(text)) }
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    personRow(source)
+                } header: { Text("Merge this person") }
+                Section {
+                    ForEach(candidates) { person in
+                        Button { target = person; confirming = true } label: { personRow(person) }
+                            .buttonStyle(.plain)
+                    }
+                    if !loading && candidates.isEmpty && failure == nil {
+                        Text(query.isEmpty ? "No other people available." : "No matching people.").foregroundStyle(.secondary)
+                    }
+                } header: { Text("Choose the person to keep") }
+                if let failure {
+                    Section {
+                        Text(failure).foregroundStyle(.red)
+                        Button("Reload people") { Task { await load() } }
+                    }
+                }
+            }
+            .searchable(text: $query, prompt: "Find a person")
+            .navigationTitle("Merge people").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) } }
+            .disabled(saving)
+            .overlay { if loading || saving { ProgressView(saving ? "Merging…" : "Loading people…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .interactiveDismissDisabled(saving)
+            .task { await load() }
+            .confirmationDialog("Merge with \(target.map { displayName($0, kind: "person") } ?? "this person")?", isPresented: $confirming, titleVisibility: .visible) {
+                Button("Merge people", role: .destructive) { Task { await merge() } }
+            } message: {
+                Text("Both groups will use this person’s name. This can’t be undone automatically.")
+            }
+        }
+    }
+    private func personRow(_ person: RemoteGroup) -> some View {
+        HStack(spacing: 12) {
+            ThumbnailView(source: person.cover(kind: "person"), shared: shared, size: .sm)
+                .frame(width: 52, height: 52).clipShape(Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayName(person, kind: "person")).foregroundStyle(.primary)
+                if let count = person.item_count { Text("\(count.formatted()) photos").font(.caption).foregroundStyle(.secondary) }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+    }
+    private func load() async {
+        guard let client = app.client, !loading else { return }
+        loading = true; failure = nil
+        defer { loading = false }
+        do {
+            let fresh = try await client.allPeople(shared: shared)
+            guard !Task.isCancelled, app.client === client else { return }
+            people = fresh.sorted { displayName($0, kind: "person").localizedStandardCompare(displayName($1, kind: "person")) == .orderedAscending }
+        } catch { if !isCancelledRequest(error) { failure = error.localizedDescription } }
+    }
+    private func merge() async {
+        guard let client = app.client, let target, target.id != source.id, !saving else { return }
+        saving = true; failure = nil
+        defer { saving = false }
+        do {
+            try await client.mergePeople(target: target, sources: [source.id], shared: shared)
+            guard app.client === client else { dismiss(); return }
+            merged(target)
+            NotificationCenter.default.post(name: .foteraPeopleChanged, object: nil)
+            Haptics.success(); dismiss()
+        } catch {
+            failure = "Couldn’t confirm the merge. Reload people before trying again. " + error.localizedDescription
+        }
+    }
+}
+
 struct PersonNameEditor: View {
     let person: RemoteGroup
     let shared: Bool
@@ -986,6 +1340,7 @@ struct PersonNameEditor: View {
     @State private var name = ""
     @State private var saving = false
     @State private var failure: String?
+    @State private var recovered = false
     @FocusState private var focused: Bool
     private var trimmed: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     var body: some View {
@@ -995,6 +1350,7 @@ struct PersonNameEditor: View {
                     HStack { Spacer(); ThumbnailView(source: person.cover(kind: "person"), shared: shared, size: .m).frame(width: 100, height: 100).clipShape(Circle()); Spacer() }
                     TextField("Name", text: $name).textContentType(.name).textInputAutocapitalization(.words).focused($focused)
                 } footer: { Text("This name is saved in Synology Photos and applies to this person’s group of photos.") }
+                if recovered { Section { Text("A previous entry was recovered on this device. Save to confirm it on the NAS.").font(.footnote) } }
                 if let failure { Section { Text(failure).foregroundStyle(.red) } }
             }
             .navigationTitle(person.name.isEmpty ? "Name person" : "Edit name").navigationBarTitleDisplayMode(.inline)
@@ -1007,6 +1363,12 @@ struct PersonNameEditor: View {
             .disabled(saving).overlay { if saving { ProgressView("Saving name…") } }
             .interactiveDismissDisabled(saving)
             .onAppear { name = person.name; focused = true }
+            .task {
+                guard let client = app.client, let prior = await client.savedPersonName(id:person.id,shared:shared),
+                      !prior.name.isEmpty, (!prior.confirmed || person.name.isEmpty), prior.name != person.name else { return }
+                // Never silently reinstate a name removed through the NAS website.
+                name = prior.name; recovered = true
+            }
         }
     }
     private func save() async {

@@ -119,12 +119,13 @@ import UIKit
     private static func run(_ task: BGTask, deadline: Date?) async {
         let backup = BackupController.shared
         var finished = false
-        let worker = Task { @MainActor in
-            guard await ensureAttached() else { return }
+        let worker = Task { @MainActor () -> Bool in
+            guard await ensureAttached(), !Task.isCancelled else { return false }
             await backup.waitForNetwork()
-            guard !backup.running else { return }
+            guard !backup.running else { return true }
             await backup.run(deadline: deadline, background: deadline != nil, trigger: deadline == nil ? "overnight" : "refresh")
             BackupNotifier.checkStalled()
+            return !Task.isCancelled && backup.queue != nil && backup.queue?.failure == nil
         }
         task.expirationHandler = {
             Task { @MainActor in
@@ -133,8 +134,8 @@ import UIKit
                 if !finished { finished = true; task.setTaskCompleted(success: false) }
             }
         }
-        await worker.value
+        let success = await worker.value
         schedule(backup.preferences)
-        if !finished { finished = true; task.setTaskCompleted(success: backup.queue?.failure == nil) }
+        if !finished { finished = true; task.setTaskCompleted(success: success) }
     }
 }

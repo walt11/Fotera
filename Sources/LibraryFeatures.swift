@@ -428,7 +428,11 @@ struct RecyclePreview: View {
     @EnvironmentObject private var app: AppModel
     @State private var image: UIImage?
     @State private var failed = false
-    @MainActor private static let cache = NSCache<NSString, UIImage>()
+    @MainActor private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>(); cache.countLimit = 300
+        cache.totalCostLimit = 12_000_000
+        return cache
+    }()
     @MainActor private static let limiter = RequestLimiter(limit: 3)
     private var isVideo: Bool { ["mov", "mp4", "m4v", "avi", "mkv", "3gp"].contains((path as NSString).pathExtension.lowercased()) }
     var body: some View {
@@ -445,8 +449,10 @@ struct RecyclePreview: View {
         .frame(width: 56, height: 56)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityHidden(true)
-        .task(id: path) {
-            if let hit = Self.cache.object(forKey: path as NSString) { image = hit; return }
+        .task(id: app.account + "|" + path) {
+            image = nil; failed = false
+            let key = app.account + "|" + path
+            if let hit = Self.cache.object(forKey: key as NSString) { image = hit; return }
             guard let client = app.client else { failed = true; return }
             do { try await Self.limiter.acquire() } catch { return }   // Scrolled away.
             defer { Self.limiter.release() }
@@ -456,12 +462,15 @@ struct RecyclePreview: View {
                     let url = try await client.recycleStreamURL(path: path)
                     let ext = (path as NSString).pathExtension.lowercased()
                     let asset = AVURLAsset(url: url, options: [AVURLAssetOverrideMIMETypeKey: ext == "mov" ? "video/quicktime" : "video/mp4"])
-                    let generator = AVAssetImageGenerator(asset: asset)
-                    generator.appliesPreferredTrackTransform = true
-                    generator.maximumSize = CGSize(width: 168, height: 168)
-                    let frame = try await withTimeout(10) { try await generator.image(at: .zero).image }
+                    let frame = try await withTimeout(10) {
+                        let generator = AVAssetImageGenerator(asset: asset)
+                        generator.appliesPreferredTrackTransform = true
+                        generator.maximumSize = CGSize(width: 168, height: 168)
+                        return try await generator.image(at: .zero).image
+                    }
                     let decoded = UIImage(cgImage: frame)
-                    Self.cache.setObject(decoded, forKey: path as NSString)
+                    try Task.checkCancellation()
+                    Self.cache.setObject(decoded, forKey: key as NSString, cost: 168 * 168 * 4)
                     image = decoded; return
                 }
                 let data = try await client.recyclePreview(path: path)
@@ -469,9 +478,10 @@ struct RecyclePreview: View {
                 try data.write(to: file)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let decoded = await ImagePipeline.decode(file: file, maxPixels: 168) else { failed = true; return }
-                Self.cache.setObject(decoded, forKey: path as NSString)
+                try Task.checkCancellation()
+                    Self.cache.setObject(decoded, forKey: key as NSString, cost: 168 * 168 * 4)
                 image = decoded
-            } catch { failed = true }
+            } catch { if !isCancelledRequest(error) { failed = true } }
         }
     }
 }
@@ -490,9 +500,20 @@ struct SharedWithMeView: View {
             }
             if albums.isEmpty && failure == nil { Text("No albums shared with you") }
             if let failure { Text(failure).foregroundStyle(.red) }
-        }.navigationTitle("Shared with me").task { await load() }.refreshable { await load() }
+        }.navigationTitle("Shared with me")
+            .refreshWhileActive(key: app.account) { await load() }
+            .refreshable { await load() }
     }
-    private func load() async { guard let client = app.client else { return }; do { albums = try await client.sharedWithMe(); base = await client.base } catch { failure = error.localizedDescription } }
+    private func load() async {
+        guard let client = app.client else { return }
+        do {
+            let fresh = try await client.sharedWithMe()
+            guard !Task.isCancelled, app.client === client else { return }
+            albums = fresh; failure = nil
+        } catch {
+            if !isCancelledRequest(error), app.client === client { failure = error.localizedDescription }
+        }
+    }
 }
 
 struct CollectionWidgetChoice: Codable {
@@ -508,6 +529,8 @@ struct CollectionWidgetChoice: Codable {
             if let source = photo.thumbnailSource, let image = await ImagePipeline.shared.image(source, shared: choice.shared, size: .m), let data = image.jpegData(compressionQuality: 0.85) { snapshots.append(.init(title: choice.title, image: data, date: photo.date ?? Date())) }
             if snapshots.count == 12 { break }
         }
+        try Task.checkCancellation()
+        guard ImagePipeline.shared.client === client else { throw CancellationError() }
         guard !snapshots.isEmpty else { throw FeatureError.message("No previews are available for this collection yet.") }
         try WidgetSnapshotStore.saveFeed(snapshots, kind: choice.kind); WidgetCenter.shared.reloadAllTimelines()
     }

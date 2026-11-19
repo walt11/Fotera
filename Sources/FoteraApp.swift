@@ -7,7 +7,15 @@ import WidgetKit
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--phone-library-preview") {
+            if StoreScreenshots.enabled {
+                Group {
+                    if DebugScreen.name == "memory" {
+                        MemoryStoryView(memory: Memory(id: "demo", title: "A little escape", items: StoreScreenshots.photos), shared: false) { _ in }
+                    } else { MainTabs() }
+                }
+                .environmentObject(app)
+                .task { app.library.loadStoreScreenshotFixtures() }
+            } else if ProcessInfo.processInfo.arguments.contains("--phone-library-preview") {
                 MainTabs().environmentObject(app).task { await app.previewPhoneLibrary() }
             } else if ProcessInfo.processInfo.arguments.contains("--delete-warning-preview") {
                 DeleteWarningPreview().environmentObject(app)
@@ -17,7 +25,11 @@ import WidgetKit
                 MapStressPreview().environmentObject(app)
             } else if ProcessInfo.processInfo.arguments.contains("--ui-preview") {
                 Group {
-                    if DebugScreen.name == "settings" { SettingsView() }
+                    if DebugScreen.name == "badges" { PhotoCopyBadgePreview() }
+                    else if DebugScreen.name == "settings" { SettingsView() }
+                    else if DebugScreen.name == "person" {
+                        NavigationStack { PersonDetailView(person: RemoteGroup(id: -1, name: "Sample person", item_count: 0), shared: false) }
+                    }
                     else { MainTabs() }
                 }.environmentObject(app)
                     .task {
@@ -151,8 +163,8 @@ import WidgetKit
     /// Parks the current account and opens the sign-in screen for another one.
     func beginAddingAccount() async {
         let current = AccountRef(address: address, username: username)
+        guard AccountVault.park(current) else { notice = "Couldn’t save this sign-in securely. Unlock the iPhone and try again."; return }
         await deactivate()
-        AccountVault.park(current)
         addingAccount = current
         phase = .signedOut
     }
@@ -167,13 +179,12 @@ import WidgetKit
     func switchAccount(to target: AccountRef) async {
         let current = AccountRef(address: address, username: username)
         guard target != current else { return }
+        guard AccountVault.park(current) else { notice = "Couldn’t save this sign-in securely. Unlock the iPhone and try again."; return }
         Task { await LocalAssets.shared.clear() }
         await deactivate()
-        AccountVault.park(current)
         guard AccountVault.unpark(target) else {
             AccountVault.unpark(current)
-            AccountStore.remove(target)
-            notice = "That account’s sign-in was no longer saved. Add it again."
+            notice = "Couldn’t restore that sign-in. Unlock the iPhone and try again, or add the account again."
             phase = .launching; await restore(); return
         }
         phase = .launching
@@ -300,14 +311,16 @@ import WidgetKit
             notice = "\(files.count) shared \(files.count == 1 ? "item is" : "items are") waiting. Choose a folder in Library → ⋯ → Upload to NAS."
             return
         }
+        let queue = manualUploads, account = account, space = ShareInbox.uploadShared
         var added = 0
         for file in files {
+            guard self.account == account, self.client === client, !Task.isCancelled else { return }
             do {
-                try await manualUploads.enqueue(file, filename: file.lastPathComponent, folder: folder, shared: ShareInbox.uploadShared, move: true)
+                try await queue.enqueue(file, filename: file.lastPathComponent, folder: folder, shared: space, move: true)
                 ShareInbox.remove(file); added += 1
             } catch { notice = "Couldn’t queue a shared file: " + error.localizedDescription }
         }
-        if added > 0 { manualUploads.start(client: client, wifiOnly: false) }
+        if added > 0, self.account == account, self.client === client { queue.start(client: client, wifiOnly: false) }
     }
     /// Before suspension, hand queued uploads to iOS so they continue in the background.
     func enteredBackground() {
@@ -400,10 +413,10 @@ struct MainTabs: View {
         TabView(selection: $tab) {
             PhotosTab(library: app.library, backup: BackupController.shared)
                 .tabItem { Label("Photos", systemImage: "photo.on.rectangle.angled") }.tag(0)
-            SearchTab(library: app.library)
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(1)
+            AlbumsTab()
+                .tabItem { Label("Albums", systemImage: "rectangle.stack") }.tag(1)
             LibraryTab(library: app.library)
-                .tabItem { Label("Library", systemImage: "rectangle.stack") }.tag(2)
+                .tabItem { Label("Library", systemImage: "square.grid.2x2") }.tag(2)
         }
         .adaptiveTabs()
     }
@@ -418,7 +431,7 @@ enum DebugScreen {
         #endif
         return nil
     }
-    static var initialTab: Int { name == "search" ? 1 : (name == "library" ? 2 : 0) }
+    static var initialTab: Int { name == "albums" ? 1 : ((name == "library" || name == "search") ? 2 : 0) }
 }
 
 // MARK: - Sign in
@@ -520,13 +533,20 @@ struct LoginView: View {
 // MARK: - Photos
 
 struct PhotosTab: View {
+    @ObservedObject var library: LibraryStore
+    @ObservedObject var backup: BackupController
+    @State private var selection:Set<Int>?
+    var body:some View {PhotosTabContent(library:library,backup:backup,selection:$selection)}
+}
+
+struct PhotosTabContent: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject var library: LibraryStore
     @ObservedObject var backup: BackupController
     @AppStorage("timelineGrouping") private var grouping = TimelineGrouping.day.rawValue
     /// "timeline" or "folders": browse by date, or by the NAS folder structure.
     @AppStorage("photosViewMode") private var viewMode = "timeline"
-    @State private var selection: Set<Int>?
+    @Binding var selection: Set<Int>?
     @State private var showingSettings = false
     @State private var showingBackup = false
     @State private var memory: Memory?
@@ -538,9 +558,10 @@ struct PhotosTab: View {
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbarBackground(.hidden, for: .navigationBar)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    BackupProgressLine(backup: backup) { showingBackup = true }
-                        .animation(.snappy, value: backup.running)
+                .overlay(alignment: .bottom) {
+                    TimelineStatusPopup(library: library, backup: backup, notice: app.notice)
+                        .id(app.account + (app.shared ? "|shared" : "|personal"))
+                        .padding(.horizontal, 20).padding(.bottom, 12)
                 }
                 .toolbar {
                     if selection == nil {
@@ -555,6 +576,9 @@ struct PhotosTab: View {
                                     Label("Folders", systemImage: "folder").tag("folders")
                                 }
                                 if viewMode != "folders" {
+                                    Picker("Storage", selection: $library.storageFilter) {
+                                        ForEach(TimelineStorageFilter.allCases) { Text($0.rawValue).tag($0) }
+                                    }
                                     Picker("Group by", selection: $grouping) {
                                         ForEach(TimelineGrouping.allCases) { Text($0.rawValue).tag($0.rawValue) }
                                     }
@@ -589,7 +613,10 @@ struct PhotosTab: View {
                     if memory.id == "debug" {
                         MediaViewer(items: memory.items, startID: memory.items.first?.id ?? 0, shared: app.shared)
                     } else {
-                        MemoryStoryView(memory: memory, shared: app.shared) { pendingTimelinePhoto = $0 }
+                        MemoryStoryView(memory: memory, shared: app.shared) {
+                            library.storageFilter = .all
+                            pendingTimelinePhoto = $0
+                        }
                     }
                 }
                 .task { library.refreshPhoneLibrary() }
@@ -604,6 +631,7 @@ struct PhotosTab: View {
                         memory = Memory(id: "debug", title: "", items: Array(library.photos.prefix(20)).filter { $0.id == first.id } + library.photos.prefix(5))
                     }
                 }
+                .onChange(of: library.storageFilter) { selection = nil }
                 .onChange(of: grouping) { library.grouping = TimelineGrouping(rawValue: grouping) ?? .day }
                 .onReceive(NotificationCenter.default.publisher(for: .foteraOpenURL)) { note in
                     if (note.object as? URL)?.host == "memories", let first = library.memories.first { memory = first }
@@ -616,9 +644,7 @@ struct PhotosTab: View {
             FolderView(folder: nil, embedded: true).id(app.account + (app.shared ? "|shared" : "|personal"))
         } else if library.photos.isEmpty {
             if library.syncing || library.loadingPhone {
-                SkeletonGrid().overlay(alignment: .bottom) {
-                    if let progress = library.progress { Text(progress).font(.footnote).card(padding: 10).padding(.bottom, 24) }
-                }
+                SkeletonGrid()
             } else if let failure = library.failure {
                 ContentUnavailableView {
                     Label("Couldn’t load photos", systemImage: "wifi.exclamationmark")
@@ -629,16 +655,27 @@ struct PhotosTab: View {
                     .overlay(alignment: .bottom) { if !app.shared { phoneAccess.padding(.bottom, 40) } }
             }
         } else {
-            PhotoGrid(sections: library.gridSections, shared: app.shared, selection: $selection, showsScrubber: true, timelineJump: timelineJump) {
+            PhotoGrid(sections: library.filteredGridSections, shared: app.shared, selection: $selection, showsScrubber: true, timelineJump: timelineJump) {
                 VStack(alignment: .leading, spacing: 8) {
                     if !app.shared { phoneAccess }
-                    if let notice = app.notice ?? library.failure.map({ "Couldn’t refresh: " + $0 }) {
-                        Label(notice, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 12)
+                    if library.storageFilter != .all {
+                        HStack {
+                            Text(library.storageFilter.rawValue).font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Button("Show all") { library.storageFilter = .all }
+                        }.padding(.horizontal, 12)
+                        if library.photoAccess != .authorized {
+                            Text("Storage filters reflect the iPhone photos Fotera can access.")
+                                .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 12)
+                        }
+                        if library.filteredGridSections.isEmpty {
+                            ContentUnavailableView("No matching photos", systemImage: "line.3.horizontal.decrease",
+                                description: Text("Try a different storage filter."))
+                        }
                     }
-                    if let progress = library.progress {
-                        Label(progress, systemImage: "arrow.triangle.2.circlepath").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 12)
+                    if library.storageFilter == .all && !library.memories.isEmpty {
+                        memories.allowsHitTesting(selection == nil).accessibilityHidden(selection != nil)
                     }
-                    if !library.memories.isEmpty && selection == nil { memories }
                 }
             }
             // A different account or space is a different timeline: start it at the top, not at the
@@ -680,3 +717,24 @@ struct PhotosTab: View {
         .padding(.vertical, 8)
     }
 }
+
+
+// Screenshot-only fixtures are loaded from an isolated simulator's Documents folder.
+// They are excluded from distribution builds and never sign in or read PhotoKit.
+#if DEBUG
+enum StoreScreenshots {
+    static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("--store-screenshots") }
+    static var directory: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("StoreFixtures") }
+    static func read<T: Decodable>(_ name: String, as type: T.Type) -> T? {
+        guard enabled, let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+    static var photos: [RemotePhoto] { read("photos.json", as: [RemotePhoto].self) ?? [] }
+    static var albums: [RemoteAlbum] { read("albums.json", as: [RemoteAlbum].self) ?? [] }
+    static func groups(_ name: String) -> [RemoteGroup] { read(name + ".json", as: [RemoteGroup].self) ?? [] }
+    static func image(_ id: Int?) -> UIImage? {
+        guard enabled, let id else { return nil }
+        return UIImage(contentsOfFile: directory.appendingPathComponent("\(abs(id)).png").path)
+    }
+}
+#endif

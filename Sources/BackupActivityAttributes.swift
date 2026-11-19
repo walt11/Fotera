@@ -11,6 +11,9 @@ struct BackupActivityAttributes: ActivityAttributes {
         let phase: Phase
         var fraction: Double { total > 0 ? min(1, max(0, Double(completed) / Double(total))) : 0 }
         var percent: Int { Int(fraction * 100) }
+        var hasPendingWork: Bool {
+            total > completed || awaitingVerification > 0 || phase == .uploading || phase == .verifying
+        }
         var title: String {
             switch phase {
             case .preparing: return "Preparing backup"

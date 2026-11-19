@@ -65,8 +65,9 @@ struct BackupPreferences: Codable {
     /// Staged keys trimmed to "shared|destination|asset", kept in step with `stagedAssets`.
     private var stagedAssetIDs = Set<String>()
     private var stagedPrefix = ""
+    private var attachmentID = UUID()
     private var countTask: Task<Void, Never>?
-    private var cachedTotal: (key: String, total: Int, at: Date)?
+    private var cachedTotal: (key: String, eligible: Set<String>, at: Date)?
     private var cachedBaseline: (url: URL, ids: Set<String>)?
     private var runTask: Task<Void, Never>?
     private var runScheduled = false
@@ -96,6 +97,9 @@ struct BackupPreferences: Codable {
     func attach(client: DSMClient, account: String) {
         if self.client === client && self.account == account { return }
         pause()
+        attachmentID = UUID()
+        countTask?.cancel(); countTask = nil
+        cachedTotal = nil; cachedBaseline = nil
         self.client = client; self.account = account
         if let path, path.status == .satisfied {
             let local = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
@@ -112,7 +116,8 @@ struct BackupPreferences: Codable {
         status = preferences.enabled ? "Ready" : "Backup is off."
     }
     func detach() {
-        pause(); countTask?.cancel(); queueObservation = nil; client = nil; queue = nil; preferences = BackupPreferences(); account = ""
+        attachmentID = UUID()
+        pause(); countTask?.cancel(); countTask = nil; queueObservation = nil; client = nil; queue = nil; preferences = BackupPreferences(); account = ""
         stagedAssets = []; stagedAssetIDs = []; cachedTotal = nil; cachedBaseline = nil; publishLiveActivity()
     }
     func save() {
@@ -132,13 +137,18 @@ struct BackupPreferences: Codable {
             status = "Allow photo access in iOS Settings to back up."; return
         }
         await BackupNotifier.requestPermission()
-        if !preferences.includeExisting {
-            var baseline: [String] = []
-            PHAsset.fetchAssets(with: nil).enumerateObjects { asset, _, _ in baseline.append(asset.localIdentifier) }
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try? JSONEncoder().encode(baseline).write(to: baselineURL, options: .completeFileProtectionUntilFirstUserAuthentication)
-        } else {
-            try? FileManager.default.removeItem(at: baselineURL)
+        do {
+            if !preferences.includeExisting {
+                var baseline: [String] = []
+                PHAsset.fetchAssets(with: nil).enumerateObjects { asset, _, _ in baseline.append(asset.localIdentifier) }
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try JSONEncoder().encode(baseline).write(to: baselineURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            } else if FileManager.default.fileExists(atPath: baselineURL.path) {
+                try FileManager.default.removeItem(at: baselineURL)
+            }
+        } catch {
+            status = "Couldn’t save backup settings. " + error.localizedDescription
+            return
         }
         cachedBaseline = nil
         preferences.enabled = true; preferences.enabledAt = Date()
@@ -290,24 +300,27 @@ struct BackupPreferences: Codable {
     func run(deadline: Date?, background: Bool, trigger: String? = nil) async {
         guard !Task.isCancelled, preferences.enabled, !running, let client, let queue, let destination = preferences.destination else { return }
         guard conditionsMet() else { return }
+        let attachment = attachmentID
         running = true
         cachedTotal = nil
         let started = Date(), finishedBefore = queue.completed.count, attentionBefore = queue.attention.count
         var staged = 0
         defer {
             running = false; updateCounts()
-            let finished = queue.completed.count - finishedBefore
-            BackupLog.shared.record(BackupLog.Entry(date: started, trigger: trigger ?? (background ? "background" : "foreground"),
-                seconds: Date().timeIntervalSince(started), staged: staged, finished: finished,
-                attention: queue.attention.count, status: status))
-            BackupNotifier.runFinished(newItems: finished, attention: queue.attention.count, previousAttention: attentionBefore,
-                                       upToDate: queue.pending.isEmpty && status == "Up to date")
-            if preferences.enabled, !Task.isCancelled, !queue.pending.isEmpty, !background {
-                retryTask?.cancel()
-                retryTask = Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(30))
-                    guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
-                    self?.start()
+            if attachment == attachmentID {
+                let finished = queue.completed.count - finishedBefore
+                BackupLog.shared.record(BackupLog.Entry(date: started, trigger: trigger ?? (background ? "background" : "foreground"),
+                    seconds: Date().timeIntervalSince(started), staged: staged, finished: finished,
+                    attention: queue.attention.count, status: status))
+                BackupNotifier.runFinished(newItems: finished, attention: queue.attention.count, previousAttention: attentionBefore,
+                                           upToDate: queue.pending.isEmpty && status == "Up to date")
+                if preferences.enabled, !Task.isCancelled, !queue.pending.isEmpty, !background {
+                    retryTask?.cancel()
+                    retryTask = Task { [weak self] in
+                        try? await Task.sleep(for: .seconds(30))
+                        guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
+                        self?.start()
+                    }
                 }
             }
         }
@@ -320,12 +333,14 @@ struct BackupPreferences: Codable {
                 if let deadline, Date() > deadline { break }
                 guard conditionsMet() else { return }
                 let batch = try await stage(fetch, cursor: &cursor, destination: destination, settings: settings, queue: queue,
-                                             deadline: deadline, budget: background ? (40, 1_500_000_000) : (24, 600_000_000), errors: &errors)
+                                             deadline: deadline, budget: background ? (40, 1_500_000_000) : (24, 600_000_000), errors: &errors, attachment: attachment)
+                guard attachment == attachmentID else { return }
                 staged += batch
                 updateCounts()
                 status = remainingDescription()
                 let healthy = await queue.process(client: client, wifiOnly: settings.wifiOnly, verify: settings.verify,
                                                   verifyVideos: settings.verifyVideos, deadline: deadline, maxInFlight: background ? 12 : 4, verifyAllowed: true)
+                guard attachment == attachmentID else { return }
                 updateCounts()
                 if !healthy || (batch == 0 && !queue.pending.isEmpty) {
                     status = healthy ? "Waiting to retry pending uploads or verification" : "Some uploads couldn’t start. Retrying shortly."
@@ -339,26 +354,55 @@ struct BackupPreferences: Codable {
             }
             guard !Task.isCancelled else { status = "Paused"; return }
             if queue.pending.isEmpty && cursor >= fetch.count {
+                // This repairs the display only. Deleted NAS originals stay deleted.
+                do { try await queue.reconcileCompletedPhotos(client: client, shared: settings.shared, deadline: deadline) }
+                catch { if Task.isCancelled { throw CancellationError() } }
+                guard attachment == attachmentID else { return }
                 lastCompleted = Date()
                 UserDefaults.standard.set(lastCompleted, forKey: settingsKey + ".completed")
                 skippedAssets = errors
-                status = !queue.attention.isEmpty ? "\(queue.attention.count) files need attention" : (errors > 0 ? "\(errors) items couldn’t be read. They’ll retry next time." : "Up to date")
+                if !queue.attention.isEmpty { status = "\(queue.attention.count) files need attention" }
+                else if errors > 0 { status = "\(errors) items couldn’t be read. They’ll retry next time." }
+                else if let unmatched = queue.unmatchedCompletedCount, unmatched > 0 {
+                    status = "\(unmatched) previously backed-up items need a NAS match check"
+                } else { status = "Up to date" }
             } else {
                 status = remainingDescription()
             }
         } catch is CancellationError {
-            status = "Paused"
+            if attachment == attachmentID { status = "Paused" }
         } catch {
+            guard attachment == attachmentID else { return }
             status = "Backup stopped: " + error.localizedDescription
         }
     }
     private func remainingDescription() -> String {
         let remaining = max(0, totalAssets - backedUpAssets)
-        if let activity = queue?.activity { return activity }
-        let awaiting = queue?.records.filter { $0.state == .uploaded || $0.state == .verifying }.count ?? 0
-        if awaiting > 0 { return "\(awaiting) files uploaded; awaiting verification" }
+        let records = queue?.records ?? []
+        if let message = Self.backupTransferDescription(records) { return message }
+        if let activity = queue?.activity {
+            if activity.hasPrefix("Checking existing") { return "Checking existing photos" }
+            // Queue activity can briefly retain a finished file's message.
+            if !activity.hasPrefix("Uploading ") && !activity.hasPrefix("Verifying ") { return activity }
+        }
         return remaining == 0 ? "Up to date" : "\(remaining.formatted()) remaining"
     }
+    /// A Live Photo's still, motion, and edited resources share one PhotoKit asset.
+    /// Manual uploads without a PhotoKit identifier remain independent items.
+    nonisolated static func backupItemCount(_ records: [TransferRecord]) -> Int {
+        Set(records.map { record in
+            record.sourceID.map { "asset:" + assetID($0) } ?? "file:" + record.id.uuidString
+        }).count
+    }
+
+    nonisolated static func backupTransferDescription(_ records: [TransferRecord]) -> String? {
+        let uploading = backupItemCount(records.filter { $0.state == .uploading })
+        if uploading > 0 { return "Backing up \(uploading.formatted()) \(uploading == 1 ? "item" : "items")" }
+        let awaiting = backupItemCount(records.filter { $0.state == .uploaded || $0.state == .verifying })
+        if awaiting > 0 { return "Verifying \(awaiting.formatted()) \(awaiting == 1 ? "item" : "items")" }
+        return nil
+    }
+
     private struct Fetch {
         let assets: PHFetchResult<PHAsset>
         let excluded: Set<String>
@@ -378,7 +422,7 @@ struct BackupPreferences: Codable {
         cachedBaseline = (baselineURL, ids)
         return ids
     }
-    private static func assetID(_ key: String) -> String { key.split(separator: "|").prefix(3).joined(separator: "|") }
+    nonisolated private static func assetID(_ key: String) -> String { key.split(separator: "|").prefix(3).joined(separator: "|") }
     private func assetKey(_ asset: PHAsset, _ settings: BackupPreferences) -> String {
         var key = prefix + "|" + asset.localIdentifier
         if settings.includeEdited && asset.hasAdjustments { key += "|e\(Int(asset.modificationDate?.timeIntervalSince1970 ?? 0))" }
@@ -386,10 +430,11 @@ struct BackupPreferences: Codable {
     }
     /// Exports resources until the batch budget is reached. Returns how many files were queued.
     private func stage(_ fetch: Fetch, cursor: inout Int, destination: RemoteFolder, settings: BackupPreferences, queue: TransferQueue,
-                       deadline: Date?, budget: (count: Int, bytes: Int64), errors: inout Int) async throws -> Int {
+                       deadline: Date?, budget: (count: Int, bytes: Int64), errors: inout Int, attachment: UUID) async throws -> Int {
         var staged = 0
         while cursor < fetch.count {
             try Task.checkCancellation()
+            guard attachment == attachmentID else { throw CancellationError() }
             if let deadline, Date().addingTimeInterval(8) > deadline { break }
             if queue.pending.count >= budget.count || queue.pendingBytes >= budget.bytes { break }
             let asset = fetch.assets.object(at: cursor)
@@ -411,6 +456,7 @@ struct BackupPreferences: Codable {
             } else {
                 uploadFolder = destination.name
             }
+            guard attachment == attachmentID else { throw CancellationError() }
             var failed = false
             for (index, resource) in resources {
                 try Task.checkCancellation()
@@ -426,6 +472,7 @@ struct BackupPreferences: Codable {
                 do {
                     // Fingerprint while exporting, so the file isn't read a second time before upload.
                     let digest = try await StagedExport.write(resource, to: temporary)
+                    guard attachment == attachmentID else { throw CancellationError() }
                     if let captured = asset.creationDate { try? FileManager.default.setAttributes([.modificationDate: captured], ofItemAtPath: temporary.path) }
                     try await queue.enqueue(temporary, filename: filename, folder: uploadFolder, shared: settings.shared, sourceID: sourceID, move: true, digest: digest)
                     staged += 1
@@ -438,6 +485,7 @@ struct BackupPreferences: Codable {
                     break
                 }
             }
+            guard attachment == attachmentID else { throw CancellationError() }
             if !failed { markStaged(key) }
         }
         return staged
@@ -476,7 +524,7 @@ struct BackupPreferences: Codable {
         if ProcessInfo.processInfo.arguments.contains("--fotera-live-activity-test") { return }
         #endif
         let records = queue?.records ?? []
-        let awaiting = records.filter { $0.state == .uploaded || $0.state == .verifying }.count
+        let awaiting = Self.backupItemCount(records.filter { $0.state == .uploaded || $0.state == .verifying })
         let phase: BackupActivityAttributes.ContentState.Phase
         if records.contains(where: { $0.state == .uploading }) { phase = .uploading }
         else if records.contains(where: { $0.state == .verifying }) { phase = .verifying }
@@ -507,15 +555,25 @@ struct BackupPreferences: Codable {
         guard permission == .authorized || permission == .limited else { return }
         // Counting the library is a PhotoKit query; reuse it for a minute unless settings change.
         let countKey = "\(preferences.includeVideos)|\(baselineURL.path)"
+        let eligible: Set<String>
         if let cachedTotal, cachedTotal.key == countKey, Date().timeIntervalSince(cachedTotal.at) < 60 {
-            totalAssets = cachedTotal.total
+            eligible = cachedTotal.eligible
         } else {
             let fetch = fetchAssets(preferences)
-            totalAssets = max(0, fetch.count - fetch.excluded.count)
-            cachedTotal = (countKey, totalAssets, Date())
+            var identifiers = Set<String>()
+            fetch.assets.enumerateObjects { asset, _, _ in
+                if !fetch.excluded.contains(asset.localIdentifier) { identifiers.insert(asset.localIdentifier) }
+            }
+            eligible = Set(identifiers.map { prefix + "|" + $0 })
+            cachedTotal = (countKey, eligible, Date())
         }
         let pendingAssets = Set((queue?.records ?? []).filter { !$0.state.isFinished }.compactMap { $0.sourceID.map(Self.assetID) })
-        backedUpAssets = min(totalAssets, max(0, stagedAssetIDs.subtracting(pendingAssets).count))
+        let counts = Self.progressCounts(eligible: eligible, staged: stagedAssetIDs, pending: pendingAssets)
+        totalAssets = counts.total; backedUpAssets = counts.completed
+    }
+    nonisolated static func progressCounts(eligible: Set<String>, staged: Set<String>, pending: Set<String>) -> (total: Int, completed: Int) {
+        (eligible.count, eligible.intersection(staged).subtracting(pending).count)
+
     }
 }
 /// Streams a PhotoKit resource to disk and computes its SHA-256 and size in the same pass.

@@ -51,6 +51,7 @@ struct OriginalPackage {
     private var entries: [String: Entry] = [:]
     private var order: [String] = []
     private var inflight: [String: Task<PHLivePhoto, Error>] = [:]
+    private var generation = UUID()
     private let limit = 8
     nonisolated static func key(_ item: RemotePhoto, client: DSMClient, shared: Bool) -> String {
         "\(ObjectIdentifier(client).hashValue)|\(shared)|\(item.id)|\(item.additional?.thumbnail?.cache_key ?? "")"
@@ -60,12 +61,15 @@ struct OriginalPackage {
         let key = Self.key(item, client: client, shared: shared)
         if let entry = entries[key] { touch(key); return entry.photo }
         if let task = inflight[key] { return try await task.value }
+        let generation = generation
         let task = Task<PHLivePhoto, Error> {
             let archive = try await client.livePackage(item, shared: shared, albumID: albumID, useOfflineCache: true)
             defer { try? FileManager.default.removeItem(at: archive) }
             let package = try await Task.detached(priority: .userInitiated) { try OriginalPackage.unpack(archive) }.value
             do {
                 let photo = try await package.livePhoto(placeholder: placeholder)
+                try Task.checkCancellation()
+                guard generation == self.generation else { throw CancellationError() }
                 store(key, Entry(photo: photo, directory: package.directory))
                 return photo
             } catch {
@@ -73,7 +77,7 @@ struct OriginalPackage {
             }
         }
         inflight[key] = task
-        defer { inflight[key] = nil }
+        defer { if inflight[key] == task { inflight[key] = nil } }
         return try await task.value
     }
     private func touch(_ key: String) { order.removeAll { $0 == key }; order.append(key) }
@@ -85,6 +89,9 @@ struct OriginalPackage {
         }
     }
     func clear() {
+        generation = UUID()
+        for task in inflight.values { task.cancel() }
+        inflight.removeAll()
         for entry in entries.values { try? FileManager.default.removeItem(at: entry.directory) }
         entries = [:]; order = []
     }

@@ -29,6 +29,19 @@ import ImageIO
     }
 }
 
+/// A bounded look-ahead window: evict the oldest request when scrolling reaches new rows.
+struct ThumbnailPrefetchWindow {
+    let limit: Int
+    private(set) var keys: [String] = []
+    func contains(_ key: String) -> Bool { keys.contains(key) }
+    mutating func insert(_ key: String) -> String? {
+        guard !contains(key) else { return nil }
+        keys.append(key)
+        return keys.count > limit ? keys.removeFirst() : nil
+    }
+    mutating func remove(_ key: String) { keys.removeAll { $0 == key } }
+}
+
 /// Loads, decodes, and caches server previews in memory and on disk. One request per image at a time.
 extension Notification.Name {
     /// Posted with the photo ID when a preview is regenerated, so only that photo's tiles reload.
@@ -39,10 +52,12 @@ extension Notification.Name {
     private let memory = NSCache<NSString, UIImage>()
     private var inflight: [String: (task: Task<UIImage?, Never>, waiters: Int)] = [:]
     private let limiter = RequestLimiter(limit: 6)
+    private let groupLimiter = RequestLimiter(limit: 2)
     private let originalLimiter = RequestLimiter(limit: 2)
     /// Prefetches use their own small limiter so they never delay tiles that are on screen.
     private let prefetchLimiter = RequestLimiter(limit: 2)
-    private var prefetching = Set<String>()
+    private var prefetchWindow = ThumbnailPrefetchWindow(limit: 16)
+    private var prefetchTasks: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     private(set) var client: DSMClient?
     private var account = ""
     private init() {
@@ -52,6 +67,8 @@ extension Notification.Name {
     func configure(client: DSMClient?, account: String) {
         if account != self.account { memory.removeAllObjects() }
         self.client = client; self.account = account
+        for entry in prefetchTasks.values { entry.task.cancel() }
+        prefetchTasks = [:]; prefetchWindow = ThumbnailPrefetchWindow(limit: 16)
         for entry in inflight.values { entry.task.cancel() }
         inflight = [:]
     }
@@ -94,7 +111,7 @@ extension Notification.Name {
         }
         guard let client else { return nil }
         let limiter = limiter
-        let maxPixels: CGFloat = size == .xl ? 2400 : 480
+        let maxPixels: CGFloat = size == .xl ? 2400 : (size == .sm ? 256 : 480)
         let task = Task<UIImage?, Never> { [account] in
             if let data = await LibraryCache.shared.preview(key: key), let image = await Self.decode(data, maxPixels: maxPixels) {
                 return image
@@ -124,26 +141,70 @@ extension Notification.Name {
         inflight[key] = (task, 1)
         return await wait(for: key, task)
     }
-    /// Loads upcoming thumbnails into the memory cache at low priority.
+    /// Resolve incomplete/stale collection covers using the same routes as collection browsing.
+    func groupPreview(_ fallback: GroupPreviewSource, shared: Bool, size: ThumbnailSize) async -> UIImage? {
+        let group = fallback.group
+        let key = "group|\(account)|\(shared)|\(size.rawValue)|\(fallback.kind)|\(group.id)|\(group.name)|\(group.additional?.thumbnail?.cache_key ?? "")|\(group.item_count ?? -1)"
+        if let hit = memory.object(forKey: key as NSString) { return hit }
+        if var entry = inflight[key] {
+            entry.waiters += 1; inflight[key] = entry
+            return await wait(for: key, entry.task)
+        }
+        guard let client, ["place", "thing"].contains(fallback.kind) else { return nil }
+        let task = Task<UIImage?, Never> {
+            do {
+                let photos: [RemotePhoto]
+                try await self.groupLimiter.acquire()
+                do {
+                    defer { self.groupLimiter.release() }
+                    try Task.checkCancellation()
+                    if fallback.kind == "place" {
+                        photos = try await client.items(.place(group.id), shared: shared, offset: 0, limit: 6)
+                    } else {
+                        guard !group.name.isEmpty else { return nil }
+                        photos = try await client.search(keyword: group.name, shared: shared, offset: 0, limit: 6)
+                    }
+                }
+                for photo in photos {
+                    try Task.checkCancellation()
+                    if let source = photo.thumbnailSource,
+                       let image = await self.image(source, shared: shared, size: size) { return image }
+                }
+                // Only try one bounded still original after exhausting small server previews.
+                if let photo = photos.first(where: { !$0.isVideo }) {
+                    try Task.checkCancellation()
+                    return await self.originalPreview(photo, shared: shared, size: size)
+                }
+            } catch { }
+            return nil
+        }
+        inflight[key] = (task, 1)
+        return await wait(for: key, task)
+    }
+    /// Bounded, cancellable look-ahead. Visible tiles join the same image request instead of
+    /// downloading a second copy while a slow remote prefetch is still in flight.
     func prefetch(_ sources: [ThumbnailSource], shared: Bool, size: ThumbnailSize) {
-        guard let client else { return }
-        let limiter = prefetchLimiter
+        guard client != nil else { return }
         for source in sources {
             let key = key(source, shared, size)
-            guard memory.object(forKey: key as NSString) == nil, inflight[key] == nil, prefetching.insert(key).inserted else { continue }
-            Task(priority: .utility) { [account] in
-                defer { prefetching.remove(key) }
-                var data = await LibraryCache.shared.preview(key: key)
-                if data == nil {
-                    guard (try? await limiter.acquire()) != nil else { return }
-                    defer { limiter.release() }
-                    guard memory.object(forKey: key as NSString) == nil, inflight[key] == nil else { return }
-                    data = try? await client.thumbnail(source, shared: shared, size: size)
-                    if let data, !account.isEmpty { await LibraryCache.shared.savePreview(key: key, data: data) }
-                }
-                guard let data, let image = await Self.decode(data, maxPixels: size == .xl ? 2400 : 480) else { return }
-                memory.setObject(image, forKey: key as NSString, cost: Int(image.size.width * image.size.height * image.scale * image.scale * 4))
+            guard memory.object(forKey: key as NSString) == nil, inflight[key] == nil,
+                  !prefetchWindow.contains(key) else { continue }
+            if let evicted = prefetchWindow.insert(key) {
+                prefetchTasks.removeValue(forKey: evicted)?.task.cancel()
             }
+            let id = UUID()
+            let task = Task(priority: .utility) {
+                defer {
+                    if prefetchTasks[key]?.id == id {
+                        prefetchTasks[key] = nil; prefetchWindow.remove(key)
+                    }
+                }
+                do { try await prefetchLimiter.acquire() } catch { return }
+                defer { prefetchLimiter.release() }
+                guard !Task.isCancelled else { return }
+                _ = await image(source, shared: shared, size: size)
+            }
+            prefetchTasks[key] = (id, task)
         }
     }
     nonisolated static func isHEIC(_ photo: RemotePhoto) -> Bool {
@@ -210,11 +271,11 @@ extension Notification.Name {
         } onCancel: {
             Task { @MainActor in self.drop(key, task: task) }
         }
-        if let image {
+        if let image, !task.isCancelled {
             memory.setObject(image, forKey: key as NSString, cost: Int(image.size.width * image.size.height * image.scale * image.scale * 4))
         }
         if inflight[key]?.task == task { inflight[key] = nil }
-        return image
+        return Task.isCancelled || task.isCancelled ? nil : image
     }
     private func drop(_ key: String, task: Task<UIImage?, Never>) {
         guard var entry = inflight[key], entry.task == task else { return }
@@ -256,6 +317,11 @@ extension Notification.Name {
     }
 }
 
+struct GroupPreviewSource: Hashable {
+    let group: RemoteGroup
+    let kind: String
+}
+
 /// A square, cropped preview that loads lazily and cancels when scrolled away.
 struct ThumbnailView: View {
     let source: ThumbnailSource?
@@ -263,6 +329,7 @@ struct ThumbnailView: View {
     var size: ThumbnailSize = .m
     var contentMode: ContentMode = .fill
     var fallbackPhoto: RemotePhoto? = nil
+    var fallbackGroup: GroupPreviewSource? = nil
     var animatesLoading = true
     @State private var image: UIImage?
     @State private var revision = 0
@@ -275,7 +342,8 @@ struct ThumbnailView: View {
         let photoID: Int?
         let localVersion: Double?
         let revision: Int
-        var content: [AnyHashable] { [source, shared, size, photoID, localVersion, revision] }
+        let group: GroupPreviewSource?
+        var content: [AnyHashable] { [source, shared, size, photoID, localVersion, revision, group] }
     }
     @State private var shownFor: [AnyHashable]?
     var body: some View {
@@ -293,10 +361,16 @@ struct ThumbnailView: View {
                 guard (photo != nil && photo == fallbackPhoto?.id) || (unit != nil && unit == source?.id) else { return }
                 revision += 1
             }
-            .task(id: RequestID(source: source, shared: shared, size: size.rawValue, active: scenePhase == .active, photoID: fallbackPhoto?.id, localVersion: fallbackPhoto?.localVersion, revision: revision)) {
+            .task(id: RequestID(source: source, shared: shared, size: size.rawValue, active: scenePhase == .active, photoID: fallbackPhoto?.id, localVersion: fallbackPhoto?.localVersion, revision: revision, group: fallbackGroup)) {
                 // Keep the current image across scene changes so the app-switcher snapshot isn't blank.
-                let request = RequestID(source: source, shared: shared, size: size.rawValue, active: true, photoID: fallbackPhoto?.id, localVersion: fallbackPhoto?.localVersion, revision: revision)
+                let request = RequestID(source: source, shared: shared, size: size.rawValue, active: true, photoID: fallbackPhoto?.id, localVersion: fallbackPhoto?.localVersion, revision: revision, group: fallbackGroup)
                 if shownFor != request.content { image = nil; shownFor = request.content }
+                #if DEBUG
+                if StoreScreenshots.enabled {
+                    image = StoreScreenshots.image(source?.id ?? fallbackPhoto?.id)
+                    return
+                }
+                #endif
                 guard scenePhase == .active, image == nil else { return }
                 if let cached = source.flatMap({ ImagePipeline.shared.cached($0, shared: shared, size: size) })
                     ?? ImagePipeline.shared.cachedLocal(fallbackPhoto, size: size) { image = cached; return }
@@ -309,7 +383,13 @@ struct ThumbnailView: View {
                     if loaded == nil, let source { loaded = await ImagePipeline.shared.image(source, shared: shared, size: size) }
                     guard !Task.isCancelled else { return }
                     if loaded == nil, let fallbackPhoto {
+                        // Let rapidly passing tiles disappear before starting a large original download.
+                        do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
                         loaded = await ImagePipeline.shared.originalPreview(fallbackPhoto, shared: shared, size: size)
+                    }
+                    guard !Task.isCancelled else { return }
+                    if loaded == nil, let fallbackGroup {
+                        loaded = await ImagePipeline.shared.groupPreview(fallbackGroup, shared: shared, size: size)
                     }
                     guard !Task.isCancelled else { return }
                     if let loaded {

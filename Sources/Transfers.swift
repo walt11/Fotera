@@ -57,11 +57,15 @@ struct TransferRecord: Codable, Identifiable {
     private let directory: URL
     private var task: Task<Void, Never>?
     private var events = 0
+    private var processing = false
     private var duplicateCatalog: [Bool: [RemotePhoto]] = [:]
     private var duplicateDigests: [String: Set<String>] = [:]
     private var duplicateIndex: [String: Set<String>] = [:]
     private var duplicateIndexChanges = 0
+    private var duplicateIndexWrite: Task<Void, Never>?
     private var catalogLoaded: [Bool: Date] = [:]
+    private var reconciledPhotos: [String: Int] = [:]
+    private(set) var unmatchedCompletedCount: Int?
     private var pendingWrite: Task<Void, Never>?
     /// Supplies the library index the app already holds, so the duplicate check doesn't re-list the NAS.
     static var catalogSource: (@MainActor (Bool) -> [RemotePhoto]?)?
@@ -138,12 +142,13 @@ struct TransferRecord: Codable, Identifiable {
         photoLinks.removeAll { $0.remoteID == link.remoteID && $0.shared == link.shared && $0.localID == link.localID }
         photoLinks.append(link)
     }
-    private func writeNow() {
+    @discardableResult private func writeNow() -> Bool {
         do {
             try JSONEncoder().encode(records).write(to: directory.appendingPathComponent("queue.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             try JSONEncoder().encode(photoLinks).write(to: directory.appendingPathComponent("photo-links.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
-        catch { failure = "Couldn’t save the upload queue. " + error.localizedDescription }
+        catch { failure = "Couldn’t save the upload queue. " + error.localizedDescription; return false }
+        return true
     }
     private func rebuildIndex() { activeSources = Set(records.filter { !$0.state.isFinished }.compactMap(\.sourceID)) }
     private func source(_ record: TransferRecord) -> URL { directory.appendingPathComponent(record.id.uuidString) }
@@ -176,7 +181,10 @@ struct TransferRecord: Codable, Identifiable {
             if let sourceID { activeSources.insert(sourceID) }
             persist(immediate: true)
         } catch {
-            try? FileManager.default.removeItem(at: target); throw error
+            // Restore ownership when a moved file couldn't be staged (for example, disk full).
+            if move { try? FileManager.default.moveItem(at: target, to: url) }
+            else { try? FileManager.default.removeItem(at: target) }
+            throw error
         }
     }
     func retry(_ record: TransferRecord) {
@@ -211,8 +219,7 @@ struct TransferRecord: Codable, Identifiable {
         records[index].state = state; records[index].message = message; records[index].updated = Date()
         rememberPhotoLink(records[index])
         changedSpaces.insert(records[index].shared)
-        try? FileManager.default.removeItem(at: source(records[index]))
-        UploadReceipt.remove(records[index].id)
+        let finishedRecord = records[index]
         markCompleted(records[index].sourceID)
         if let sourceID = records[index].sourceID {
             activeSources.remove(sourceID)
@@ -223,7 +230,12 @@ struct TransferRecord: Codable, Identifiable {
             let drop = Set(finished.prefix(finished.count - Self.historyLimit).map { records[$0].id })
             records.removeAll { drop.contains($0.id) }
         }
-        persist()
+        // Save the completed identity before removing the only staged original and receipt.
+        pendingWrite?.cancel(); pendingWrite = nil
+        if writeNow() {
+            try? FileManager.default.removeItem(at: source(finishedRecord))
+            UploadReceipt.remove(finishedRecord.id)
+        }
     }
 
     func start(client: DSMClient, wifiOnly: Bool, verify: Bool = true) {
@@ -246,7 +258,11 @@ struct TransferRecord: Codable, Identifiable {
     @discardableResult
     func process(client: DSMClient, wifiOnly: Bool, verify: Bool, verifyVideos: Bool = true, deadline: Date? = nil,
                  maxInFlight: Int = 4, verifyAllowed: Bool = true) async -> Bool {
+        // Shortcuts, foreground work and background wakes can arrive together.
+        guard !processing else { return true }
+        processing = true
         defer {
+            processing = false
             flush()
             // Publish once per processing batch, after upload links have been saved.
             // This also covers background receipts and uploads skipped as duplicates.
@@ -258,6 +274,7 @@ struct TransferRecord: Codable, Identifiable {
         }
         var networkFailures = 0
         while !Task.isCancelled {
+            guard failure == nil else { return false }
             if let deadline, Date() > deadline { break }
             var progressed = false
             let active = await BackgroundUploads.shared.activeIDs()
@@ -388,13 +405,82 @@ struct TransferRecord: Codable, Identifiable {
         return nil
     }
 
+    /// Historical uploads can keep obsolete NAS IDs after a reimport or server-side move.
+    /// Repair display identity with exact original bytes; never upload a deleted item again here.
+    func reconcileCompletedPhotos(client: DSMClient, shared: Bool, deadline: Date?) async throws {
+        unmatchedCompletedCount = nil
+        guard let catalog = Self.catalogSource?(shared), !catalog.isEmpty else { return }
+        let phone = await PhoneLibraryIndex.shared.photos()
+        let links = photoLinks
+        let local = await Task.detached(priority: .utility) {
+            UnifiedLibrary.merge(remote: catalog, local: phone, links: links, shared: shared).filter(\.isLocalOnly)
+        }.value
+        guard !local.isEmpty else { unmatchedCompletedCount = 0; return }
+        let completedAssets = Set(completed.compactMap(PhoneDeletionMatch.sourceAssetID))
+        var catalogHasher = Hasher()
+        for item in catalog { catalogHasher.combine(item.id); catalogHasher.combine(item.filesize); catalogHasher.combine(item.thumbnailSource?.cacheKey) }
+        let catalogStamp = catalogHasher.finalize()
+        // Reuse the current complete index; stale IDs from a previous run must not mask replacements.
+        duplicateCatalog[shared] = catalog; catalogLoaded[shared] = Date()
+        var repaired = false
+        defer {
+            activity = nil
+            if repaired {
+                persist(immediate: true)
+                NotificationCenter.default.post(name: .foteraUploadCatalogChanged, object: nil,
+                    userInfo: ["account": account, "shared": shared])
+            }
+        }
+        for photo in local where photo.isLocalOnly {
+            try Task.checkCancellation()
+            if let deadline, Date().addingTimeInterval(8) > deadline { break }
+            guard let localID = photo.localAssetID, completedAssets.contains(localID) else { continue }
+            let key = "\(shared)|\(localID)|\(photo.localVersion ?? 0)"
+            guard reconciledPhotos[key] != catalogStamp else { continue }
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject else { continue }
+            let resources = PHAssetResource.assetResources(for: asset)
+            let types: [PHAssetResourceType] = photo.isVideo ? [.video, .fullSizeVideo] : [.photo, .fullSizePhoto, .alternatePhoto]
+            for type in types {
+                guard let resource = resources.first(where: { $0.type == type }) else { continue }
+                try Task.checkCancellation()
+                if let deadline, Date().addingTimeInterval(8) > deadline { return }
+                activity = "Checking backup matches"
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("FoteraMatch-" + UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: file) }
+                let digest = try await StagedExport.write(resource, to: file)
+                var candidate = TransferRecord(id: UUID(), filename: resource.originalFilename, folder: "/", shared: shared, state: .queued, created: Date())
+                candidate.digest = digest.0; candidate.size = digest.1
+                guard let match = try await existingOriginal(candidate, client: client) else { continue }
+                try Task.checkCancellation()
+                let recovered = UploadPhotoLink(remoteID: match, localID: localID, shared: shared, created: Date())
+                photoLinks = Self.replacingLink(recovered, in: photoLinks)
+                repaired = true
+                // An edited rendition proves a display match only. Do not add it to the
+                // original-verification ledger or make the original eligible for removal.
+                break
+            }
+            reconciledPhotos[key] = catalogStamp
+        }
+        let updatedLinks = photoLinks
+        unmatchedCompletedCount = await Task.detached(priority: .utility) {
+            UnifiedLibrary.merge(remote: catalog, local: phone, links: updatedLinks, shared: shared)
+                .filter { $0.isLocalOnly && $0.localAssetID.map(completedAssets.contains) == true }.count
+        }.value
+    }
+
+    nonisolated static func replacingLink(_ link: UploadPhotoLink, in links: [UploadPhotoLink]) -> [UploadPhotoLink] {
+        links.filter { !($0.remoteID == link.remoteID && $0.localID == link.localID && $0.shared == link.shared) } + [link]
+    }
+
     /// Writes the candidate digest index in batches, encoding off the main thread.
     private func flushDuplicateIndex() {
         guard duplicateIndexChanges > 0 else { return }
         duplicateIndexChanges = 0
         let snapshot = duplicateIndex
         let url = directory.appendingPathComponent("duplicate-index.json")
-        Task.detached(priority: .utility) {
+        let previous = duplicateIndexWrite
+        duplicateIndexWrite = Task.detached(priority: .utility) {
+            await previous?.value
             if let data = try? JSONEncoder().encode(snapshot) {
                 try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             }
@@ -421,7 +507,7 @@ struct TransferRecord: Codable, Identifiable {
             }
             try Task.checkCancellation()
             let request = try await client.makeUploadRequest(source: source(record), filename: record.filename, folder: record.folder,
-                                                             shared: record.shared, transferID: record.id, wifiOnly: wifiOnly)
+                                                             shared: record.shared, transferID: record.id, wifiOnly: wifiOnly, includePreviews: !Self.isLiveCompanion(record.sourceID))
             guard let j = records.firstIndex(where: { $0.id == id }) else { return false }
             records[j].state = .uploading; records[j].updated = Date(); records[j].message = nil
             persist(immediate: true)
@@ -451,13 +537,16 @@ struct TransferRecord: Codable, Identifiable {
                let j = records.firstIndex(where: { $0.id == id }) {
                 records[j].remoteID = match.id
                 records[j].state = .uploaded
-                if !verify { finish(j, state: .complete, message: "Found on the NAS.") } else { persist() }
+                // A matching name alone cannot prove an interrupted upload succeeded.
+                records[j].message = "Found on the NAS; checking the original."
+                persist(immediate: true)
             } else if let j = records.firstIndex(where: { $0.id == id }) {
                 records[j].state = .queued; persist()
             }
             return
         }
-        UploadReceipt.remove(id)
+        // Persist the outcome before discarding the durable receipt.
+        defer { if writeNow() { UploadReceipt.remove(id) } }
         switch receipt.outcome {
         case .uploaded(let remote):
             records[i].remoteID = remote
@@ -468,7 +557,11 @@ struct TransferRecord: Codable, Identifiable {
             // Without a full download, at least confirm the NAS didn't keep a different file with this name.
             let details = try? await client.details(id: remote, shared: record.shared)
             guard let j = records.firstIndex(where: { $0.id == id }) else { return }
-            if let details, details.type != "live", let remoteSize = details.filesize, let size = records[j].size, remoteSize != size {
+            guard let details, details.filesize != nil else {
+                records[j].message = "Uploaded; waiting to confirm the NAS copy."
+                return
+            }
+            if details.type != "live", let remoteSize = details.filesize, let size = records[j].size, remoteSize != size {
                 records[j].remoteID = nil
                 records[j].attempts = (records[j].attempts ?? 0) + 1
                 records[j].filename = Self.uniqueName(records[j].filename, id: records[j].id)
@@ -564,6 +657,11 @@ struct TransferRecord: Codable, Identifiable {
             persist()
             return isCancelledRequest(error) ? true : false
         }
+    }
+    nonisolated static func isLiveCompanion(_ sourceID: String?) -> Bool {
+        guard let parts = sourceID?.split(separator: "|"), parts.count >= 5,
+              let raw = Int(parts[3]), let type = PHAssetResourceType(rawValue: raw) else { return false }
+        return type == .pairedVideo || type == .fullSizePairedVideo
     }
     static func isVideoFile(_ filename: String) -> Bool {
         ["mov", "mp4", "m4v", "hevc", "avi", "mkv", "3gp"].contains((filename as NSString).pathExtension.lowercased())
@@ -892,4 +990,63 @@ struct DestinationPicker: View {
 
 extension Notification.Name {
     static let foteraUploadCatalogChanged = Notification.Name("FoteraUploadCatalogChanged")
+}
+
+
+/// Synology Photos' web client uploads aspect-fit JPEGs at 240, 320 and 1280 pixels.
+/// Generated from the exact staged original, never from a potentially edited PhotoKit rendition.
+enum UploadPreviews {
+    struct Preview: Sendable { let field: String; let data: Data }
+    static func generate(source: URL, filename: String) async throws -> [Preview] {
+        let worker = Task.detached(priority: .utility) { () throws -> [Preview] in
+            try Task.checkCancellation()
+            let image: CGImage
+            if let input = CGImageSourceCreateWithURL(source as CFURL, nil),
+               let decoded = CGImageSourceCreateThumbnailAtIndex(input, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1280,
+                kCGImageSourceShouldCacheImmediately: true
+               ] as CFDictionary) {
+                image = decoded
+            } else if ["mov", "mp4", "m4v", "hevc", "avi", "mkv", "3gp"].contains((filename as NSString).pathExtension.lowercased()) {
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 1280, height: 1280)
+                guard let frame = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
+                    try Task.checkCancellation()
+                    return [] // A codec iOS cannot decode must not prevent the original backup.
+                }
+                image = frame
+            } else {
+                // Unsupported originals remain backed up without substituting a fake preview.
+                return []
+            }
+            return try encode(image)
+        }
+        return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+    }
+    static func encode(_ image: CGImage) throws -> [Preview] {
+        try [("thumb_sm", 240), ("thumb_m", 320), ("thumb_xl", 1280)].map { field, edge in
+            try Task.checkCancellation()
+            let scale = min(1, Double(edge) / Double(max(image.width, image.height)))
+            let width = max(1, Int(Double(image.width) * scale))
+            let height = max(1, Int(Double(image.height) * scale))
+            guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw ConnectionError.invalidResponse }
+            context.setFillColor(UIColor.black.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let data = NSMutableData()
+            guard let rendered = context.makeImage(),
+                  let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
+                throw ConnectionError.invalidResponse
+            }
+            CGImageDestinationAddImage(destination, rendered, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { throw ConnectionError.invalidResponse }
+            return Preview(field: field, data: data as Data)
+        }
+    }
 }

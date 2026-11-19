@@ -14,14 +14,18 @@ enum ShareInbox {
     /// Copies a file into its own folder in the inbox, keeping the original filename.
     static func add(_ file: URL) throws {
         guard let root else { throw CocoaError(.fileWriteNoPermission) }
-        let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let id = UUID().uuidString
+        let folder = root.appendingPathComponent(".pending-" + id, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
         try FileManager.default.copyItem(at: file, to: folder.appendingPathComponent(file.lastPathComponent))
+        // Publish only complete files; the main app may be reading the inbox concurrently.
+        try FileManager.default.moveItem(at: folder, to: root.appendingPathComponent(id, isDirectory: true))
     }
     /// Files waiting to be uploaded, oldest first.
     static func pending() -> [URL] {
         guard let root, let folders = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey]) else { return [] }
-        return folders.sorted {
+        return folders.filter { !$0.lastPathComponent.hasPrefix(".") }.sorted {
             ((try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) <
             ((try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast)
         }.compactMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil))?.first }

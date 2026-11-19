@@ -33,10 +33,13 @@ import UserNotifications
         if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
         save()
     }
+    private var pendingSave: Task<Void, Never>?
     func clear() { entries = []; save() }
     private func save() {
         let snapshot = entries, url = url
-        Task.detached(priority: .utility) {
+        let previous = pendingSave
+        pendingSave = Task.detached(priority: .utility) {
+            await previous?.value
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? JSONEncoder().encode(snapshot).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
@@ -144,11 +147,26 @@ struct BackupHistoryView: View {
 /// Opens Backup when a backup notification is tapped.
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationRouter()
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let link = response.notification.request.content.userInfo["url"] as? String, let url = URL(string: link) else { return }
-        await MainActor.run { NotificationCenter.default.post(name: .foteraOpenURL, object: url) }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        handleResponse(link: response.notification.request.content.userInfo["url"] as? String,
+                       completion: completionHandler)
     }
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .list] }
+
+    func handleResponse(link: String?, completion: @escaping () -> Void) {
+        // UIKit may update its restoration snapshot inside this completion. The async delegate
+        // bridge resumes off-main even after MainActor.run, so keep the callback on the main actor.
+        Task { @MainActor in
+            defer { completion() }
+            guard let link, let url = URL(string: link) else { return }
+            NotificationCenter.default.post(name: .foteraOpenURL, object: url)
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        Task { @MainActor in completionHandler([.banner, .list]) }
+    }
 }
 extension Notification.Name {
     static let foteraOpenURL = Notification.Name("FoteraOpenURL")

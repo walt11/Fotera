@@ -4,7 +4,7 @@ import Network
 // MARK: - Duplicates
 
 /// Finds likely duplicates in the synced index: exact copies (same size and capture time) and bursts
-/// (same size within 1% and taken within 2 seconds). Like Immich, it pre-selects all but one per group.
+/// (same size within 1% and taken within 2 seconds). Metadata matches are candidates, not byte verification.
 struct DuplicateGroup: Identifiable {
     enum Kind { case exact, burst, similar }
     let id: Int
@@ -57,6 +57,7 @@ struct DuplicatesView: View {
     @State private var groups: [DuplicateGroup] = []
     @State private var selected = Set<Int>()
     @State private var scanned = false
+    @State private var scanTask: Task<Void, Never>?
     @StateObject private var runner = ActionRunner()
     var body: some View {
         List {
@@ -67,7 +68,7 @@ struct DuplicatesView: View {
                     description: Text("No exact copies or burst shots in \(app.shared ? "Shared Space" : "your library")."))
             } else {
                 Section {
-                    Text("\(groups.count) groups · \(selected.count) selected to delete. In exact copies the first photo is kept; bursts and similar photos start unselected. Tap photos to change.")
+                    Text("\(groups.count) groups · \(selected.count) selected to delete. Review each group and tap the photos you want to delete. Matching dates and sizes do not prove identical content.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(groups) { group in
@@ -114,10 +115,11 @@ struct DuplicatesView: View {
         }
         .actionRunner(runner) { scan() }
         .task(id: library.remotePhotos.count) { scan() }
+        .onDisappear { scanTask?.cancel() }
     }
     private func label(_ kind: DuplicateGroup.Kind) -> String {
         switch kind {
-        case .exact: return "Exact copies · "
+        case .exact: return "Possible copies · "
         case .burst: return "Burst · "
         case .similar: return "Similar · "
         }
@@ -125,7 +127,8 @@ struct DuplicatesView: View {
     private func scan() {
         let photos = library.remotePhotos   // Duplicates are a NAS clean-up tool; phone-only items aren't candidates.
         let client = app.client, shared = app.shared
-        Task {
+        scanTask?.cancel()
+        scanTask = Task {
             var found = await Task.detached(priority: .userInitiated) { DuplicateFinder.groups(in: photos) }.value
             // Add look-alikes from Synology Photos' Similar photos feature, when the NAS has it on.
             if let client, let similar = try? await client.similarItems(shared: shared) {
@@ -133,9 +136,10 @@ struct DuplicatesView: View {
                 found += DuplicateFinder.similarGroups(similar, excluding: taken)
                 found.sort { ($0.items.first?.time ?? 0) > ($1.items.first?.time ?? 0) }
             }
+            guard !Task.isCancelled, app.client === client, app.shared == shared else { return }
             groups = found
-            // Only exact copies are pre-selected. Bursts and similar photos are different shots, so you pick those yourself.
-            selected = Set(found.filter { $0.kind == .exact }.flatMap { $0.items.dropFirst().map(\.id) })
+            // Never preselect deletion based only on capture time and file size.
+            selected.formIntersection(Set(found.flatMap { $0.items.map(\.id) }))
             scanned = true
         }
     }

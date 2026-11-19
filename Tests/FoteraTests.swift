@@ -1,10 +1,219 @@
 import XCTest
+import SwiftUI
 import UIKit
+import ImageIO
 import ZIPFoundation
 @testable import Fotera
 
 /// Unit tests for logic that doesn't need a NAS. NAS round trips stay in the DEBUG `--fotera-verify` harness.
 final class FoteraTests: XCTestCase {
+    func testLiveMotionResourceDoesNotReplaceStillPreview() {
+        XCTAssertTrue(TransferQueue.isLiveCompanion("false|0|asset|9|1"))
+        XCTAssertTrue(TransferQueue.isLiveCompanion("false|0|asset|10|2|e123"))
+        XCTAssertFalse(TransferQueue.isLiveCompanion("false|0|asset|1|0"))
+        XCTAssertFalse(TransferQueue.isLiveCompanion("false|0|asset|2|0"))
+        XCTAssertFalse(TransferQueue.isLiveCompanion(nil))
+    }
+
+    func testUploadPreviewsAreBoundedJPEGsWithAspectRatioPreserved() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 800))
+        try renderer.jpegData(withCompressionQuality: 0.9) { context in
+            UIColor.orange.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1600, height: 800))
+        }.write(to: file)
+        let previews = try await UploadPreviews.generate(source: file, filename: "photo.jpg")
+        XCTAssertEqual(previews.map(\.field), ["thumb_sm", "thumb_m", "thumb_xl"])
+        for (preview, width) in zip(previews, [240, 320, 1280]) {
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(preview.data as CFData, nil))
+            XCTAssertEqual(CGImageSourceGetType(source) as String?, "public.jpeg")
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(image.width, width)
+            XCTAssertEqual(image.height, width / 2)
+        }
+    }
+
+    func testUnsupportedOriginalDoesNotGetFakeUploadPreview() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("unsupported".utf8).write(to: file)
+        let previews = try await UploadPreviews.generate(source: file, filename: "unknown.bin")
+        XCTAssertTrue(previews.isEmpty)
+    }
+
+    func testNotificationTapRoutesAndCompletesOnMainThread() async {
+        let routed = expectation(description: "Backup route delivered")
+        let completed = expectation(description: "System callback completed")
+        completed.assertForOverFulfill = true
+        let observer = NotificationCenter.default.addObserver(forName: .foteraOpenURL, object: nil, queue: nil) { note in
+            XCTAssertTrue(Thread.isMainThread)
+            XCTAssertEqual(note.object as? URL, URL(string: "fotera://backup"))
+            routed.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        await Task.detached {
+            NotificationRouter.shared.handleResponse(link: "fotera://backup") {
+                XCTAssertTrue(Thread.isMainThread)
+                completed.fulfill()
+            }
+        }.value
+        await fulfillment(of: [routed, completed], timeout: 5, enforceOrder: true)
+    }
+
+    func testNotificationWithoutRouteStillCompletesOnMainThread() async {
+        let completed = expectation(description: "Missing route completes")
+        completed.assertForOverFulfill = true
+        await Task.detached {
+            NotificationRouter.shared.handleResponse(link: nil) {
+                XCTAssertTrue(Thread.isMainThread)
+                completed.fulfill()
+            }
+        }.value
+        await fulfillment(of: [completed], timeout: 5)
+    }
+
+    func testPrefetchWindowStaysBoundedDuringFastScrolling() {
+        var window = ThumbnailPrefetchWindow(limit: 16)
+        for index in 0..<10_000 {
+            let key = String(index)
+            let evicted = window.insert(key)
+            if index >= 16 { XCTAssertEqual(evicted, String(index - 16)) }
+            XCTAssertLessThanOrEqual(window.keys.count, 16)
+            XCTAssertNil(window.insert(key))
+        }
+        XCTAssertEqual(window.keys, (9984..<10_000).map(String.init))
+        window.remove("9999")
+        XCTAssertFalse(window.contains("9999"))
+        XCTAssertNil(window.insert("new"))
+    }
+
+    func testCopyLocationAlwaysShowsKnownStorage() {
+        for location in [PhotoCopyLocation.phone, .nas, .both, .nasUnchecked] {
+            XCTAssertNotNil(UIImage(systemName: location.symbol))
+        }
+        let remote = photo(42)
+        XCTAssertEqual(PhotoCopyLocation.resolve(remote, onPhone: nil), .nasUnchecked)
+        XCTAssertFalse(PhotoCopyLocation.resolve(remote, onPhone: nil).symbol.isEmpty)
+        XCTAssertEqual(PhotoCopyLocation.resolve(remote, onPhone: false), .nas)
+        XCTAssertEqual(PhotoCopyLocation.resolve(remote, onPhone: true), .both)
+        var merged = remote; merged.localAssetID = "phone-copy"
+        XCTAssertEqual(PhotoCopyLocation.resolve(merged, onPhone: nil), .both)
+        XCTAssertEqual(PhotoCopyLocation.resolve(merged, onPhone: false), .nas)
+        var local = photo(-1); local.localAssetID = "phone-copy"
+        XCTAssertEqual(PhotoCopyLocation.resolve(local, onPhone: nil), .phone)
+    }
+
+    func testLivePhotoBackupCountsOneItemUntilAllResourcesFinish() {
+        let still = TransferRecord(id: UUID(), filename: "IMG_1.HEIC", folder: "/", shared: false,
+            state: .uploading, created: Date(), sourceID: "false|1|assetA|1|0")
+        var motion = TransferRecord(id: UUID(), filename: "IMG_1.MOV", folder: "/", shared: false,
+            state: .uploading, created: Date(), sourceID: "false|1|assetA|9|1")
+        XCTAssertEqual(BackupController.backupTransferDescription([still, motion]), "Backing up 1 item")
+        motion.state = .verifying
+        XCTAssertEqual(BackupController.backupItemCount([still, motion]), 1)
+        XCTAssertEqual(BackupController.progressCounts(eligible: ["false|1|assetA"],
+            staged: ["false|1|assetA"], pending: ["false|1|assetA"]).completed, 0)
+        var verifiedStill = still
+        verifiedStill.state = .verified
+        XCTAssertEqual(BackupController.backupTransferDescription([verifiedStill, motion]), "Verifying 1 item")
+        motion.state = .verified
+        XCTAssertNil(BackupController.backupTransferDescription([verifiedStill, motion]))
+        XCTAssertEqual(BackupController.progressCounts(eligible: ["false|1|assetA"],
+            staged: ["false|1|assetA"], pending: []).completed, 1)
+        let other = TransferRecord(id: UUID(), filename: "IMG_1.HEIC", folder: "/", shared: false,
+            state: .uploading, created: Date(), sourceID: "false|1|assetB|1|0")
+        XCTAssertEqual(BackupController.backupItemCount([still, motion, other]), 2)
+        var manual = other; manual.sourceID = nil
+        XCTAssertEqual(BackupController.backupItemCount([still, motion, manual]), 2)
+    }
+
+    func testTimelineStorageFiltersKeepGroupsAndExcludeEmptySections() {
+        var device = photo(-1); device.localAssetID = "device"
+        let cloud = photo(2)
+        var both = photo(3); both.localAssetID = "both"
+        let sections = [GridSection(id: "day", title: "Today", items: [device, cloud, both],
+                                    group: "month", groupTitle: "November"),
+                        GridSection(id: "empty", title: nil, items: [cloud])]
+        XCTAssertEqual(TimelineStorageFilter.all.apply(to: sections).count, 2)
+        let deviceResult = TimelineStorageFilter.deviceOnly.apply(to: sections)
+        XCTAssertEqual(deviceResult.count, 1)
+        XCTAssertEqual(deviceResult.first?.items.map(\.id), [-1])
+        XCTAssertEqual(deviceResult.first?.group, "month")
+        XCTAssertEqual(deviceResult.first?.groupTitle, "November")
+        XCTAssertEqual(TimelineStorageFilter.cloudOnly.apply(to: sections).first?.items.map(\.id), [2])
+        XCTAssertEqual(TimelineStorageFilter.both.apply(to: sections).first?.items.map(\.id), [3])
+    }
+
+    func testBackupProgressIgnoresRemovedAndExcludedAssets() {
+        let counts = BackupController.progressCounts(eligible: ["current", "new", "uploading"],
+            staged: ["old-deleted", "excluded-video", "current", "uploading"], pending: ["uploading"])
+        XCTAssertEqual(counts.total, 3)
+        XCTAssertEqual(counts.completed, 1)
+        let empty = BackupController.progressCounts(eligible: [], staged: ["old-deleted"], pending: [])
+        XCTAssertEqual(empty.completed, 0)
+    }
+
+    func testFavoriteSnapshotRequiresEveryPage() async throws {
+        let first = (1...DSMClient.pageSize).map { photo($0) }
+        do {
+            _ = try await LibraryStore.favoriteIDs { offset in
+                if offset == 0 { return first }
+                throw URLError(.notConnectedToInternet)
+            }
+            XCTFail("An incomplete snapshot must not replace saved favorites")
+        } catch { XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet) }
+        let complete = try await LibraryStore.favoriteIDs { offset in
+            offset == 0 ? first : [self.photo(999)]
+        }
+        XCTAssertEqual(complete.count, DSMClient.pageSize + 1)
+        XCTAssertTrue(complete.contains(999))
+    }
+
+    func testTimeoutIsDistinguishedFromUserCancellation() async {
+        do {
+            let _: Int = try await withTimeout(0.01) {
+                try await Task.sleep(for: .seconds(30)); return 1
+            }
+            XCTFail("Expected timeout")
+        } catch { XCTAssertEqual((error as? URLError)?.code, .timedOut) }
+        let task = Task {
+            try await withTimeout(30) { try await Task.sleep(for: .seconds(30)); return 1 }
+        }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+
+    @MainActor func testFavoriteLookupRemainsConsistentDuringDeletion() async throws {
+        let store = LibraryStore(remotePhotos: (1...200).map { photo($0) })
+        try await Task.sleep(for: .milliseconds(50))
+        for id in stride(from: 200, through: 1, by: -1) {
+            store.remove(ids: [id])
+            await Task.yield()
+            let expected = store.photos.filter { [1, 100, 200].contains($0.id) }.map(\.id)
+            XCTAssertEqual(store.favorites([1, 100, 200]).map(\.id), expected)
+        }
+    }
+
+    func testCompletedBackupScanHasNoLiveActivityWork() {
+        typealias State = BackupActivityAttributes.ContentState
+        XCTAssertFalse(State(completed: 100, total: 100, awaitingVerification: 0, phase: .preparing).hasPendingWork)
+        XCTAssertFalse(State(completed: 0, total: 0, awaitingVerification: 0, phase: .preparing).hasPendingWork)
+        XCTAssertTrue(State(completed: 99, total: 100, awaitingVerification: 0, phase: .uploading).hasPendingWork)
+        XCTAssertTrue(State(completed: 100, total: 100, awaitingVerification: 1, phase: .verifying).hasPendingWork)
+    }
+
+    func testAlbumPermissionsKeepPublicAndNamedUsersSeparate() throws {
+        let data = Data(#"{"id":7,"shared":true,"additional":{"sharing_info":{"privacy_type":"private","permission":[{"role":"view","type":"user","id":12,"name":"test-user","db_id":3},{"role":"download","member":{"type":"public"}}]}}}"#.utf8)
+        let state = try JSONDecoder().decode(AlbumSharingState.self, from: data)
+        let grants = try XCTUnwrap(state.additional?.sharing_info?.permission)
+        XCTAssertEqual(grants.count, 2)
+        XCTAssertEqual(grants[0].member.id, 12)
+        XCTAssertEqual(grants[0].role, "view")
+        XCTAssertNil(grants[1].member.id)
+        XCTAssertEqual(grants[1].member.type, "public")
+    }
+
     private func photo(_ id: Int, _ name: String = "IMG.HEIC", time: Double? = 1_780_739_985, type: String = "photo",
                        size: Int64? = 1_000, duration: Int? = nil) -> RemotePhoto {
         var item = RemotePhoto(id: id, filename: name, time: time, type: type, additional: nil)
@@ -134,6 +343,61 @@ final class FoteraTests: XCTestCase {
         local.localVersion = 110
         XCTAssertEqual(UnifiedLibrary.merge(remote: [remote], local: [local], links: [link]).count, 2)
     }
+    func testNASMotionFileMarkedLiveMatchesPhoneVideo() {
+        for name in ["IMG_0069+1.mov", "IMG_0067+1.MOV", "IMG_0208.mp4"] {
+            let remote = photo(99, name, time: 100, type: "live")
+            var local = photo(-1, name, time: 100, type: "video"); local.localAssetID = "phone"
+            XCTAssertTrue(remote.isVideo)
+            XCTAssertFalse(remote.isLive)
+            let link = UploadPhotoLink(remoteID: 99, localID: "phone", shared: false, created: Date())
+            let result = UnifiedLibrary.merge(remote: [remote], local: [local], links: [link])
+            XCTAssertEqual(result.count, 1)
+            XCTAssertEqual(PhotoCopyLocation.resolve(result[0], onPhone: nil), .both)
+        }
+        let still = photo(100, "IMG_0208.heic", type: "live")
+        XCTAssertTrue(still.isLive)
+        XCTAssertFalse(still.isVideo)
+    }
+
+    func testVerifiedEditedRenditionCanMatchPNGWithoutChangingItsFilename() {
+        var local = photo(-1, "IMG_0226.PNG", time: 100); local.localAssetID = "phone"
+        local.localResourceNames = ["IMG_0226.PNG", "FullSizeRender.jpeg"]
+        let remote = photo(42, "IMG_0226.jpg", time: 900000)
+        let link = UploadPhotoLink(remoteID: 42, localID: "phone", shared: false, created: Date())
+        let merged = UnifiedLibrary.merge(remote: [remote], local: [local], links: [link])
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].filename, "IMG_0226.jpg")
+        XCTAssertEqual(merged[0].localAssetID, "phone")
+        XCTAssertTrue(merged[0].localResourceNames?.contains("IMG_0226.PNG") == true)
+    }
+
+    func testRecoveredUploadIdentityMatchesRenamedPhotoWithDifferentDate() {
+        var local = photo(-1, "IMG_0117.jpg", time: 1475625600.872)
+        local.localAssetID = "phone"; local.localVersion = 100
+        let remote = photo(50138, "IMG_0117+1.jpg", time: 1475708863)
+        let stale = UploadPhotoLink(remoteID: 25161, localID: "phone", shared: false, created: Date(timeIntervalSince1970: 101))
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [remote], local: [local], links: [stale]).filter(\.isLocalOnly).count, 1)
+        let recovered = UploadPhotoLink(remoteID: 50138, localID: "phone", shared: false, created: Date(timeIntervalSince1970: 102))
+        let links = TransferQueue.replacingLink(recovered, in: [stale])
+        let result = UnifiedLibrary.merge(remote: [remote], local: [local], links: links)
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.first?.localAssetID, "phone")
+        XCTAssertEqual(TransferQueue.replacingLink(recovered, in: links).count, 2)
+        XCTAssertEqual(UnifiedLibrary.merge(remote: [], local: [local], links: links).filter(\.isLocalOnly).count, 1)
+    }
+
+    func testMultipleProvenNASCopiesDoNotCreateDeviceOnlyDuplicate() {
+        var local = photo(-1, "original.jpg", time: nil); local.localAssetID = "phone"
+        let remote = [photo(1, "copy-a.jpg", time: nil), photo(2, "copy-b.jpg", time: nil)]
+        let links = [1, 2].map { UploadPhotoLink(remoteID: $0, localID: "phone", shared: false, created: Date()) }
+        for order in [remote, remote.reversed().map { $0 }] {
+            let result = UnifiedLibrary.merge(remote: order, local: [local], links: links)
+            XCTAssertEqual(result.count, 2)
+            XCTAssertTrue(result.allSatisfy { !$0.isLocalOnly })
+            XCTAssertEqual(result.first(where: { $0.localAssetID != nil })?.id, 2)
+        }
+    }
+
     func testUnifiedLibraryDoesNotGuessConflictingUploadIdentities() {
         var first = photo(-1, "a.heic", time: nil); first.localAssetID = "a"
         var other = photo(-2, "b.heic", time: nil); other.localAssetID = "b"
@@ -169,6 +433,43 @@ final class FoteraTests: XCTestCase {
         XCTAssertFalse(PhoneDeletionMatch.sameContent(remote: ["nas-hash"], local: "different-phone-hash"))
         XCTAssertFalse(PhoneDeletionMatch.sameContent(remote: [""], local: ""))
         XCTAssertTrue(PhoneDeletionMatch.sameContent(remote: ["still-hash", "motion-hash"], local: "still-hash"))
+    }
+
+    func testWidgetTimelineChangesDayWithoutAppRefresh() throws {
+        let calendar = WidgetMemorySchedule.calendar(timeZone: try XCTUnwrap(TimeZone(identifier: "America/Chicago")))
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 15, hour: 23, minute: 30)))
+        let midnight = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 16)))
+        let schedule = WidgetMemorySchedule(days: [
+            "2026-11-15": [.init(title: "Yesterday's memory", image: Data([1]), date: start)],
+            "2026-11-16": [.init(title: "Today's memory", image: Data([2]), date: midnight)]], fallback: [])
+        let saved = try JSONDecoder().decode(WidgetMemorySchedule.self, from: JSONEncoder().encode(schedule))
+        let dates = WidgetMemorySchedule.timelineDates(from: start, calendar: calendar)
+        XCTAssertTrue(dates.contains(midnight))
+        XCTAssertEqual(saved.snapshot(at: start, calendar: calendar)?.title, "Yesterday's memory")
+        XCTAssertEqual(saved.snapshot(at: midnight, calendar: calendar)?.title, "Today's memory")
+        XCTAssertEqual(saved.snapshot(at: midnight.addingTimeInterval(3600), calendar: calendar)?.image, Data([2]))
+    }
+
+    func testWidgetUsesEvergreenFallbackAfterDatedCacheExpires() throws {
+        let calendar = WidgetMemorySchedule.calendar(timeZone: TimeZone(secondsFromGMT: 0)!)
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2027, month: 1, day: 1)))
+        let schedule = WidgetMemorySchedule(days: ["2026-12-31": [.init(title: "1 year ago", image: Data([1]), date: date)]],
+            fallback: [.init(title: "From your library", image: Data([2]), date: date)])
+        XCTAssertEqual(schedule.snapshot(at: date, calendar: calendar)?.title, "From your library")
+        XCTAssertNil(WidgetMemorySchedule(days: [:], fallback: []).snapshot(at: date))
+    }
+
+    func testWidgetTimelineIncludesMidnightAcrossDaylightSavingChanges() throws {
+        let calendar = WidgetMemorySchedule.calendar(timeZone: try XCTUnwrap(TimeZone(identifier: "America/Chicago")))
+        for (month, day) in [(3, 8), (11, 1)] {
+            let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: month, day: day)))
+            let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+            let dates = WidgetMemorySchedule.timelineDates(from: start, calendar: calendar)
+            XCTAssertEqual(dates.count, 49)
+            XCTAssertTrue(dates.contains(tomorrow))
+            XCTAssertTrue(zip(dates, dates.dropFirst()).allSatisfy { $0 < $1 })
+            XCTAssertEqual(WidgetMemorySchedule.dayKey(tomorrow, calendar: calendar), String(format: "2026-%02d-%02d", month, day + 1))
+        }
     }
 
     @MainActor func testWidgetPreviewHasBoundedPixelDimensions() throws {
@@ -489,5 +790,158 @@ final class FoteraTests: XCTestCase {
     func testRecycleRestorePathRejectsTraversal() throws {
         XCTAssertEqual(try DSMClient.restoredPath("/home/#recycle/Photos/2026/a.jpg"), "/home/Photos/2026/a.jpg")
         XCTAssertThrowsError(try DSMClient.restoredPath("/home/#recycle/Photos/../secret"))
+    }
+}
+
+extension FoteraTests {
+    func testPeopleNameDraftSurvivesReopeningWithoutLeakingAcrossAccounts() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:root)}
+        let first = PersonNameHistory(root:root)
+        try await first.record(account:"first",id:5,shared:false,name:"Example name",confirmed:false)
+        let reopened = PersonNameHistory(root:root)
+        let draft = await reopened.entry(account:"first",id:5,shared:false)
+        let anotherAccount = await reopened.entry(account:"second",id:5,shared:false)
+        let sharedSpace = await reopened.entry(account:"first",id:5,shared:true)
+        XCTAssertEqual(draft?.name,"Example name"); XCTAssertEqual(draft?.confirmed,false)
+        XCTAssertNil(anotherAccount); XCTAssertNil(sharedSpace)
+        try await reopened.record(account:"first",id:5,shared:false,name:"Example name",confirmed:true)
+        let confirmed = await first.entry(account:"first",id:5,shared:false)
+        XCTAssertEqual(confirmed?.confirmed,true)
+    }
+}
+
+
+extension FoteraTests {
+    func testAlbumWithoutGeneratedThumbnailStillDecodes() throws {
+        let data = Data(#"{"id":42,"name":"Empty album","item_count":0,"additional":{"thumbnail":{}}}"#.utf8)
+        let album = try JSONDecoder().decode(RemoteAlbum.self,from:data)
+        XCTAssertEqual(album.id,42); XCTAssertEqual(album.name,"Empty album"); XCTAssertNil(album.cover)
+        let ready = try JSONDecoder().decode(RemoteAlbum.self,from:Data(#"{"id":43,"name":"Ready","additional":{"thumbnail":{"cache_key":"preview","unit_id":7}}}"#.utf8))
+        XCTAssertEqual(ready.cover?.id,7); XCTAssertEqual(ready.cover?.cacheKey,"preview")
+    }
+}
+
+
+@MainActor private final class SelectionLayoutState:ObservableObject {
+    @Published var selected:Set<Int>?
+}
+private struct SelectionLayoutHarness:View {
+    @ObservedObject var state:SelectionLayoutState
+    let app:AppModel
+    var body:some View {
+        TabView {
+            NavigationStack {
+                ScrollView {LazyVStack {ForEach(0..<100,id:\.self) {Text("Photo \($0)").frame(height:80)}}}
+                    .navigationTitle("Timeline").navigationBarTitleDisplayMode(.inline)
+                    .selectionChrome($state.selected,items:[])
+            }.tabItem {Label("Timeline",systemImage:"photo")}
+        }.environmentObject(app)
+    }
+}
+extension FoteraTests {
+    @MainActor func testSelectionBarDoesNotResizeOrMoveScrolledTimeline() async throws {
+        let state = SelectionLayoutState(), app = AppModel()
+        let controller = UIHostingController(rootView:SelectionLayoutHarness(state:state,app:app))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap{$0 as? UIWindowScene}.first)
+        let window = UIWindow(windowScene:scene)
+        window.frame = CGRect(x:0,y:0,width:393,height:852)
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer {window.isHidden = true; window.rootViewController = nil}
+        try await Task.sleep(for:.milliseconds(350)); controller.view.layoutIfNeeded()
+        func findScroll(_ view:UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > 1500 {return scroll}
+            return view.subviews.lazy.compactMap{findScroll($0)}.first
+        }
+        let scroll = try XCTUnwrap(findScroll(controller.view))
+        scroll.setContentOffset(CGPoint(x:0,y:1200),animated:false)
+        try await Task.sleep(for:.milliseconds(100))
+        let height = scroll.bounds.height, position = scroll.contentOffset.y, inset = scroll.adjustedContentInset.bottom
+        state.selected = [1]
+        try await Task.sleep(for:.milliseconds(350)); controller.view.layoutIfNeeded()
+        XCTAssertEqual(scroll.bounds.height,height,accuracy:1)
+        XCTAssertEqual(scroll.contentOffset.y,position,accuracy:1)
+        XCTAssertEqual(scroll.adjustedContentInset.bottom,inset,accuracy:1)
+        state.selected = nil
+        try await Task.sleep(for:.milliseconds(250))
+        XCTAssertEqual(scroll.contentOffset.y,position,accuracy:1)
+    }
+}
+
+
+private struct ActualTimelineSelectionHarness:View {
+    @ObservedObject var state:SelectionLayoutState
+    let app:AppModel
+    let library:LibraryStore
+    var body:some View {
+        TabView {
+            PhotosTabContent(library:library,backup:BackupController.shared,selection:$state.selected)
+                .tabItem {Label("Timeline",systemImage:"photo")}
+        }.environmentObject(app)
+    }
+}
+extension FoteraTests {
+    @MainActor func testActualTimelineKeepsMemoriesAndScrollGeometryWhenSelecting() async throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.object(forKey:"photosViewMode")
+        defaults.set("timeline",forKey:"photosViewMode")
+        defer {if let previousMode {defaults.set(previousMode,forKey:"photosViewMode")} else {defaults.removeObject(forKey:"photosViewMode")}}
+        var parts = Calendar.current.dateComponents([.year,.month,.day],from:Date())
+        parts.year! -= 1; parts.hour = 12
+        let date = try XCTUnwrap(PhotoTime.calendar.date(from:parts))
+        let photos = (1...160).map{RemotePhoto(id:$0,filename:"test-\($0).jpg",time:date.timeIntervalSince1970 + Double($0),type:"photo")}
+        let library = LibraryStore(remotePhotos:photos), app = AppModel(), state = SelectionLayoutState()
+        for _ in 0..<40 {if !library.memories.isEmpty {break}; try await Task.sleep(for:.milliseconds(50))}
+        XCTAssertFalse(library.memories.isEmpty)
+        let controller = UIHostingController(rootView:ActualTimelineSelectionHarness(state:state,app:app,library:library))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap{$0 as? UIWindowScene}.first)
+        let window = UIWindow(windowScene:scene)
+        window.frame = CGRect(x:0,y:0,width:393,height:852)
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer {window.isHidden = true; window.rootViewController = nil}
+        try await Task.sleep(for:.milliseconds(500)); controller.view.layoutIfNeeded()
+        func findScroll(_ view:UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > 1500, scroll.bounds.height > 300 {return scroll}
+            return view.subviews.lazy.compactMap{findScroll($0)}.first
+        }
+        let scroll = try XCTUnwrap(findScroll(controller.view))
+        for position:CGFloat in [0,700] {
+            scroll.setContentOffset(CGPoint(x:0,y:position),animated:false)
+            try await Task.sleep(for:.milliseconds(300))
+            let height = scroll.contentSize.height, offset = scroll.contentOffset.y, viewport = scroll.bounds.height
+            func snapshot(_ name:String) {
+                let renderer = UIGraphicsImageRenderer(bounds:window.bounds)
+                let image = renderer.image {_ in window.drawHierarchy(in:window.bounds,afterScreenUpdates:true)}
+                let attachment = XCTAttachment(image:image); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+            }
+            if position == 0 {snapshot("Timeline before selection")}
+            withAnimation(.snappy) {state.selected = [1]}
+            try await Task.sleep(for:.milliseconds(500)); controller.view.layoutIfNeeded()
+            if position == 0 {snapshot("Timeline after selection")}
+            print("TIMELINE geometry \(height) -> \(scroll.contentSize.height); memories \(library.memories.count); selected \(state.selected != nil)")
+            XCTAssertEqual(scroll.contentSize.height,height,accuracy:1,"Selecting must not remove timeline content")
+            XCTAssertEqual(scroll.contentOffset.y,offset,accuracy:1)
+            XCTAssertEqual(scroll.bounds.height,viewport,accuracy:1)
+            withAnimation(.snappy) {state.selected = nil}
+            try await Task.sleep(for:.milliseconds(400))
+            XCTAssertEqual(scroll.contentSize.height,height,accuracy:1)
+            XCTAssertEqual(scroll.contentOffset.y,offset,accuracy:1)
+        }
+    }
+}
+
+
+extension FoteraTests {
+    func testSharedAlbumBadgeUsesAccessNotRetainedSharingFlag() throws {
+        func state(_ shared:Bool,_ privacy:String,_ permissions:String,_ expiration:Int = 0) throws -> AlbumSharingState {
+            try JSONDecoder().decode(AlbumSharingState.self,from:Data("{\"id\":1,\"shared\":\(shared),\"additional\":{\"sharing_info\":{\"privacy_type\":\"\(privacy)\",\"expiration\":\(expiration),\"permission\":\(permissions)}}}".utf8))
+        }
+        let owner = #"[{"type":"user","id":1,"role":"owner"}]"#
+        XCTAssertFalse(try state(true,"private",owner).hasActiveSharing())
+        XCTAssertTrue(try state(true,"public-view",owner).hasActiveSharing())
+        XCTAssertFalse(try state(false,"public-view",owner).hasActiveSharing())
+        XCTAssertTrue(try state(true,"private",#"[{"type":"user","id":2,"role":"view"}]"#).hasActiveSharing())
+        XCTAssertTrue(try state(true,"private",#"[{"type":"group","id":3,"role":"download"}]"#).hasActiveSharing())
+        XCTAssertFalse(try state(true,"public-view",owner,100).hasActiveSharing(now:Date(timeIntervalSince1970:200)))
     }
 }

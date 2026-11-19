@@ -1,0 +1,1 @@
+[{"id": 1, "name": "Nature", "item_count": 1, "additional": {"thumbnail": {"cache_key": "demo", "unit_id": 8}}}, {"id": 2, "name": "Pets", "item_count": 1, "additional": {"thumbnail": {"cache_key": "demo", "unit_id": 2}}}, {"id": 3, "name": "Flowers", "item_count": 1, "additional": {"thumbnail": {"cache_key": "demo", "unit_id": 4}}}]

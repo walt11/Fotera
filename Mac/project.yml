@@ -1,0 +1,114 @@
+name: FoteraMac
+options:
+  deploymentTarget:
+    macOS: '14.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '1.0'
+    CURRENT_PROJECT_VERSION: '1'
+    DEVELOPMENT_TEAM: 76BJCJ4Q7X
+    CODE_SIGN_STYLE: Automatic
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
+targets:
+  FoteraMac:
+    productName: Fotera
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - Assets.xcassets
+      - path: DemoAssets
+        type: folder
+      - path: ../Sources/DSMClient.swift
+      - path: ../Sources/ConnectionResolver.swift
+      - path: ../Sources/PhotoLibrary.swift
+      - path: ../Sources/WidgetSnapshot.swift
+      - path: ../Sources/LibraryCache.swift
+      - path: ../PrivacyInfo.xcprivacy
+    dependencies:
+      - package: ZIPFoundation
+      - target: FoteraMacWidget
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: Fotera
+        PRODUCT_MODULE_NAME: FoteraMac
+        PRODUCT_BUNDLE_IDENTIFIER: net.jwalter.Fotera.Mac
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: Fotera.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: MacIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        GENERATE_INFOPLIST_FILE: YES
+  FoteraMacWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: ../Widget/FoteraWidget.swift
+      - path: ../Sources/WidgetSnapshot.swift
+    settings:
+      base:
+        PRODUCT_NAME: FoteraMacWidget
+        PRODUCT_BUNDLE_IDENTIFIER: net.jwalter.Fotera.Mac.Widget
+        INFOPLIST_FILE: WidgetInfo.plist
+        CODE_SIGN_ENTITLEMENTS: Widget.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+  FoteraMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    dependencies:
+      - target: FoteraMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.jwalter.Fotera.Mac.Tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Fotera.app/Contents/MacOS/Fotera"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+  FoteraMacLogicTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Sources
+        excludes: [MacApp.swift]
+      - Tests
+      - path: ../Sources/DSMClient.swift
+      - path: ../Sources/ConnectionResolver.swift
+      - path: ../Sources/PhotoLibrary.swift
+      - path: ../Sources/LibraryCache.swift
+      - path: ../Sources/WidgetSnapshot.swift
+    dependencies:
+      - package: ZIPFoundation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.jwalter.Fotera.Mac.LogicTests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG MAC_LOGIC_TESTS"
+        TEST_HOST: ""
+  FoteraMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [UITests]
+    dependencies:
+      - target: FoteraMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.jwalter.Fotera.Mac.UITests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  FoteraMac:
+    build:
+      targets:
+        FoteraMac: all
+    test:
+      targets: [FoteraMacTests, FoteraMacUITests]
+  FoteraMacLogic:
+    build:
+      targets:
+        FoteraMacLogicTests: all
+    test:
+      targets: [FoteraMacLogicTests]

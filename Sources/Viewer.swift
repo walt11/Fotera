@@ -77,6 +77,7 @@ struct MediaViewer: View {
     }
     /// Loads the high-quality previews either side of the current item, so swiping is instant.
     private func preloadNeighbors() {
+        guard !items.isEmpty, items.indices.contains(state.index) else { return }
         let range = max(0, state.index - 2)...min(items.count - 1, state.index + 2)
         let sources = range.filter { $0 != state.index }.compactMap { items[$0].thumbnailSource }
         ImagePipeline.shared.prefetch(sources, shared: shared, size: .xl)
@@ -308,6 +309,10 @@ actor LocalAssets {
         matches[key] = .some(found)
         return found
     }
+    func hasLocalCopy(for item: RemotePhoto) -> Bool {
+        guard let identifier = identifier(for: item), !Task.isCancelled else { return false }
+        return PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject != nil
+    }
     func clear() { matches = [:]; times = nil }
     private func mayBeLocal(_ time: Double) -> Bool {
         let set = localTimes(), base = Int(time.rounded())
@@ -377,36 +382,90 @@ final class LocalLibraryObserver: NSObject, PHPhotoLibraryChangeObserver, @unche
 }
 extension Notification.Name { static let foteraLocalLibraryChanged = Notification.Name("FoteraLocalLibraryChanged") }
 
-/// Immich-style marker on a grid tile: a cloud when the item is only on the NAS. Items also on this
-/// iPhone stay unmarked. Shows nothing without Photos access, since it can't tell.
+enum PhotoCopyLocation: Equatable {
+    case phone, nas, both, nasUnchecked
+    static func resolve(_ item: RemotePhoto, onPhone: Bool?) -> Self {
+        if item.isLocalOnly { return .phone }
+        if let onPhone { return onPhone ? .both : .nas }
+        if item.localAssetID != nil { return .both }
+        return .nasUnchecked
+    }
+    var symbol: String {
+        switch self {
+        case .phone: return "icloud.slash"
+        case .both: return "checkmark.icloud"
+        case .nas, .nasUnchecked: return "icloud"
+        }
+    }
+    var label: String {
+        switch self {
+        case .phone: return "iPhone only"
+        case .both: return "On iPhone and NAS"
+        case .nas: return "NAS only"
+        case .nasUnchecked: return "On NAS; iPhone copy not confirmed"
+        }
+    }
+}
+
+struct PhotoCopyLocationMark: View {
+    let location: PhotoCopyLocation
+    let compact: Bool
+    var body: some View {
+        Image(systemName: location.symbol)
+        .symbolRenderingMode(.monochrome)
+        .font(.system(size: compact ? 10 : 12, weight: .semibold))
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.45), radius: 1, x: 0, y: 1)
+        .padding(5)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(location.label)
+    }
+}
+
+/// Always provides a concrete view for the async check, including before Photos access is granted.
 struct LocalAvailabilityBadge: View {
     let item: RemotePhoto
     let compact: Bool
     @State private var onPhone: Bool?
     @State private var revision = 0
+    @Environment(\.scenePhase) private var scenePhase
+    private var requestID: String {
+        "\(item.id)|\(item.localAssetID ?? "")|\(item.localVersion ?? 0)|\(item.filename)|\(item.time ?? 0)|\(item.thumbnailSource?.cacheKey ?? "")|\(revision)|\(scenePhase == .active)"
+    }
     var body: some View {
-        Group {
-            if item.isLocalOnly {
-                Image(systemName: "iphone").font(.system(size: compact ? 8 : 10, weight: .semibold))
-                    .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2).padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .accessibilityLabel("iPhone only")
-            } else if onPhone == false {
-                Image(systemName: "cloud.fill").font(.system(size: compact ? 8 : 10, weight: .semibold))
-                    .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2)
-                    .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .accessibilityLabel("Only on NAS")
-            }
-        }
-        .task(id: "\(item.id)|\(revision)") {
-            guard LocalAssets.allowed, item.passphrase == nil else { onPhone = nil; return }
-            let found = await LocalAssets.shared.identifier(for: item) != nil
-            if !Task.isCancelled { onPhone = found }
+        PhotoCopyLocationMark(location: .resolve(item, onPhone: onPhone), compact: compact)
+        .task(id: requestID) {
+            guard scenePhase == .active else { return }
+            onPhone = nil
+            guard !item.isLocalOnly, LocalAssets.allowed, item.passphrase == nil else { return }
+            let found = await LocalAssets.shared.hasLocalCopy(for: item)
+            guard !Task.isCancelled else { return }
+            // Limited access cannot prove a phone copy is absent.
+            onPhone = found ? true : (PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized ? false : nil)
         }
         .onReceive(NotificationCenter.default.publisher(for: .foteraLocalLibraryChanged)) { _ in revision += 1 }
     }
 }
+
+#if DEBUG
+struct PhotoCopyBadgePreview: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Photo locations").font(.title.bold())
+            ForEach(Array([PhotoCopyLocation.phone, .nas, .both, .nasUnchecked].enumerated()), id: \.offset) { _, location in
+                HStack {
+                    Text(location.label).font(.subheadline)
+                    Spacer()
+                    LinearGradient(colors: [.orange, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .frame(width: 100, height: 100)
+                        .overlay { PhotoCopyLocationMark(location: location, compact: false) }
+                }
+            }
+        }.padding(24)
+    }
+}
+#endif
 
 /// Loads a local copy without touching iCloud; anything not fully on the phone falls back to the NAS.
 @MainActor enum LocalCopy {
@@ -455,6 +514,7 @@ struct MediaPage: View {
     @State private var preview: UIImage?
     @State private var full: UIImage?
     @State private var loadingFull = false
+    @State private var originalTask: Task<Void, Never>?
     @State private var player: AVPlayer?
     @State private var live: PHLivePhoto?
     @State private var livePlaying = false
@@ -538,14 +598,17 @@ struct MediaPage: View {
     private func loadOriginal() {
         guard full == nil, !loadingFull, !item.isVideo else { return }
         loadingFull = true
-        Task {
+        originalTask = Task {
             defer { loadingFull = false }
             do {
-                if let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 6000, network: item.isLocalOnly) { full = image; return }
+                if let local = await LocalCopy.asset(item), let image = await LocalCopy.image(local, maxPixels: 6000, network: item.isLocalOnly) {
+                    try Task.checkCancellation(); full = image; return
+                }
                 guard !item.isLocalOnly else { throw MediaFailure.unsupportedPhoto }
                 let file = try await client.original(item, shared: shared, albumID: albumID, useOfflineCache: true)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let image = await ImagePipeline.decode(file: file, maxPixels: 6000) else { throw MediaFailure.unsupportedPhoto }
+                try Task.checkCancellation()
                 full = image
             } catch {
                 if preview == nil && !isCancelledRequest(error) { failure = error.localizedDescription }
@@ -621,6 +684,7 @@ struct MediaPage: View {
         }
     }
     private func teardown() {
+        originalTask?.cancel(); originalTask = nil
         liveTask?.cancel(); liveTask = nil; livePlaying = false
         player?.pause(); player?.replaceCurrentItem(with: nil); player = nil
         live = nil; full = nil
@@ -631,7 +695,7 @@ struct MediaPage: View {
 func withTimeout<T: Sendable>(_ seconds: Double, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask { try await operation() }
-        group.addTask { try await Task.sleep(for: .seconds(seconds)); throw CancellationError() }
+        group.addTask { try await Task.sleep(for: .seconds(seconds)); throw URLError(.timedOut) }
         guard let result = try await group.next() else { throw CancellationError() }
         group.cancelAll()
         return result

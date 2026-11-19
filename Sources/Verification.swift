@@ -17,6 +17,194 @@ import Photos
             try? results.joined(separator: "\n").write(to: report, atomically: true, encoding: .utf8)
         }
         do {
+            if ProcessInfo.processInfo.arguments.contains("--remaining-backup-audit") {
+                record("Read-only audit of remaining device-only assets")
+                for _ in 0..<30 {
+                    if !BackupController.shared.running, TransferQueue.catalogSource?(false) != nil { break }
+                    try await Task.sleep(for: .seconds(1))
+                }
+                guard let queue = BackupController.shared.queue else { throw ConnectionError.invalidResponse }
+                var catalog: [RemotePhoto] = []; var offset = 0
+                while true {
+                    let page = try await client.items(.all, shared: false, offset: offset)
+                    catalog += page; offset += page.count
+                    if page.count < DSMClient.pageSize { break }
+                }
+                let phone = await PhoneLibraryIndex.shared.photos()
+                let unmatched = UnifiedLibrary.merge(remote: catalog, local: phone, links: queue.photoLinks).filter(\.isLocalOnly)
+                var rows: [[String: Any]] = []
+                for photo in unmatched {
+                    guard let localID = photo.localAssetID,
+                          let asset = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject else { continue }
+                    let resources = PHAssetResource.assetResources(for: asset)
+                    let completed = queue.completed.filter { PhoneDeletionMatch.sourceAssetID($0) == localID }
+                    let verified = queue.verifiedSources.filter { PhoneDeletionMatch.sourceAssetID($0) == localID }
+                    let links = queue.photoLinks.filter { $0.localID == localID && !$0.shared }
+                    let ids = Set(links.map(\.remoteID))
+                    let stem = (photo.filename as NSString).deletingPathExtension.lowercased()
+                    let candidates = catalog.filter { ids.contains($0.id) || ($0.filename.lowercased() as NSString).deletingPathExtension.hasPrefix(stem) }
+                    rows.append(["filename": photo.filename, "localID": localID, "type": photo.type,
+                        "completedResources": completed.sorted(), "verifiedResources": verified.sorted(),
+                        "resources": resources.map { ["name": $0.originalFilename, "type": $0.type.rawValue, "size": ($0.value(forKey: "fileSize") as? Int64) ?? -1] as [String: Any] },
+                        "linkedIDs": Array(ids), "candidates": candidates.map { ["id": $0.id, "name": $0.filename, "type": $0.type, "size": $0.filesize ?? -1] as [String: Any] }])
+                }
+                let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+                try data.write(to: documents.appendingPathComponent("remaining-backup-audit.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                record("FINISHED: audited \(rows.count) remaining items against fresh NAS catalog")
+                return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--repair-backup-matches") {
+                record("Repairing completed backup identities; no uploads or deletions")
+                for _ in 0..<60 {
+                    if !BackupController.shared.running, TransferQueue.catalogSource?(false) != nil { break }
+                    try await Task.sleep(for: .seconds(1))
+                }
+                guard !BackupController.shared.running, let queue = BackupController.shared.queue else { throw ConnectionError.invalidResponse }
+                let before = queue.photoLinks.count
+                try await queue.reconcileCompletedPhotos(client: client, shared: false, deadline: Date().addingTimeInterval(120))
+                record("PASS: reconciled backup identities; saved links \(before) → \(queue.photoLinks.count)")
+                record("FINISHED BACKUP MATCH REPAIR")
+                return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--backup-identity-check") {
+                record("Read-only original identity check")
+                guard let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--identity-asset=") }) else { throw ConnectionError.invalidResponse }
+                let identifier = String(argument.dropFirst("--identity-asset=".count))
+                let matches = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+                guard let asset = matches.firstObject,
+                      let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .photo }) else { throw ConnectionError.invalidResponse }
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: file) }
+                let digest = try await StagedExport.write(resource, to: file)
+                record("Phone original bytes: \(digest.1)")
+                let queue = TransferQueue(account: "identity-readonly-" + UUID().uuidString)
+                var candidate = TransferRecord(id: UUID(), filename: resource.originalFilename, folder: "/", shared: false, state: .queued, created: Date())
+                candidate.digest = digest.0; candidate.size = digest.1
+                let id = try await queue.existingOriginal(candidate, client: client)
+                record(id.map { "PASS: exact original exists on NAS as item \($0)" } ?? "NO MATCH: no byte-identical NAS original found")
+                record("FINISHED IDENTITY CHECK")
+                return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--upload-preview-tests") {
+                record("Testing server previews using synthetic HEIC only")
+                let token = UUID().uuidString
+                let file = documents.appendingPathComponent("Preview-\(token).heic")
+                defer { try? FileManager.default.removeItem(at: file) }
+                let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 1000))
+                let image = renderer.image { context in
+                    UIColor.systemOrange.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1600, height: 1000))
+                    UIColor.systemBlue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 800, height: 500))
+                }
+                guard let cg = image.cgImage, let writer = CGImageDestinationCreateWithURL(file as CFURL, "public.heic" as CFString, 1, nil) else { throw ConnectionError.invalidResponse }
+                CGImageDestinationAddImage(writer, cg, nil)
+                guard CGImageDestinationFinalize(writer) else { throw ConnectionError.invalidResponse }
+                let expected = try await UploadPreviews.generate(source: file, filename: file.lastPathComponent)
+                record("PASS: generated HEIC and \(expected.count) JPEG previews")
+                let root = try await client.folder(path: "/", shared: false)
+                _ = try await client.ensureBackupFolders(base: root, components: ["Fotera Validation"], shared: false)
+                record("PASS: validation folder ready")
+                let queue = TransferQueue(account: "preview-fixture-" + token)
+                try await queue.enqueue(file, filename: file.lastPathComponent, folder: "/Fotera Validation", shared: false)
+                _ = await queue.process(client: client, wifiOnly: false, verify: true, deadline: Date().addingTimeInterval(100), maxInFlight: 1)
+                guard let receipt = queue.records.first, receipt.state == .verified, let id = receipt.remoteID else {
+                    record("Queue: " + (queue.records.first?.state.rawValue ?? "missing") + " · " + (queue.records.first?.message ?? queue.failure ?? "no detail"))
+                    throw ConnectionError.invalidResponse
+                }
+                record("PASS: original HEIC uploaded and byte-verified")
+                for size in [ThumbnailSize.sm, .m, .xl] {
+                    guard let photo = try await client.findItem(named: file.lastPathComponent, inFolder: "/Fotera Validation", shared: false), photo.id == id,
+                          let source = photo.thumbnailSource else { throw ConnectionError.invalidResponse }
+                    let data = try await client.thumbnail(source, shared: false, size: size)
+                    guard let preview = expected.first(where: { $0.field == "thumb_" + size.rawValue }), data == preview.data else {
+                        record("FAIL: server preview \(size.rawValue) does not match uploaded JPEG (\(data.count) bytes)")
+                        return
+                    }
+                    record("PASS: NAS served uploaded \(size.rawValue) JPEG byte-for-byte, bypassing local caches")
+                }
+                record("FINISHED SERVER PREVIEW TEST")
+                return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--review-read-only") {
+                record("Read-only review · build " + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))
+                let count = try await client.count(shared: false)
+                let photos = try await client.items(.all, shared: false, offset: 0, limit: 6, withLocation: true)
+                record("PASS: library count and recent items (\(count) items)")
+                _ = try await client.items(.favorites, shared: false, offset: 0, limit: 6)
+                record("PASS: favorites read")
+                _ = try await client.allAlbums()
+                record("PASS: albums read")
+                for (kind, groups) in [("place", try await client.places(shared: false, limit: 3)),
+                                       ("thing", try await client.concepts(shared: false, limit: 3))] {
+                    var loaded = 0
+                    for group in groups {
+                        let image = await ImagePipeline.shared.groupPreview(.init(group: group, kind: kind), shared: false, size: .sm)
+                        if image != nil { loaded += 1 }
+                    }
+                    record("\(loaded == groups.count ? "PASS" : "CHECK"): \(kind) fallback previews \(loaded)/\(groups.count)")
+                }
+                if let source = photos.first?.thumbnailSource {
+                    let loaded = await ImagePipeline.shared.image(source, shared: false, size: .m) != nil
+                    record("\(loaded ? "PASS" : "CHECK"): timeline preview")
+                }
+                record("FINISHED READ-ONLY REVIEW")
+                return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--album-sharing-contracts") {
+                let users = try await client.featureContract("SYNO.Foto.Sharing.Misc", method: "list_user_group")
+                func shape(_ value: Any) -> Any {
+                    if let object = value as? [String: Any] { return object.mapValues { shape($0) } }
+                    if let list = value as? [Any] { return list.prefix(3).map { shape($0) } }
+                    if value is String { return "<string>" }
+                    if value is NSNumber { return "<number>" }
+                    return "<null>"
+                }
+                func recordShape(_ name: String, _ raw: String) throws {
+                    let object = try JSONSerialization.jsonObject(with: Data(raw.utf8))
+                    let data = try JSONSerialization.data(withJSONObject: shape(object), options: [.sortedKeys])
+                    record(name + ": " + String(decoding: data, as: UTF8.self))
+                }
+                try recordShape("Users", users)
+                let albums = try await client.allAlbums()
+                if let album = albums.first(where: { $0.shared == true }) ?? albums.first {
+                    try recordShape("Album", try await client.featureContract("SYNO.Foto.Browse.Album", method: "get", fields: ["id": "[\(album.id)]", "additional": "[\"sharing_info\"]"]))
+                    let state = try await client.albumSharing(id: album.id)
+                    if let token = state.additional?.sharing_info?.passphrase ?? state.passphrase {
+                        try recordShape("Permissions", try await client.featureContract("SYNO.Foto.Sharing.Passphrase", method: "get_permission", fields: ["passphrase": try DSMClient.json(token)]))
+                    }
+                }
+                if ProcessInfo.processInfo.arguments.contains("--validate-own-album-access") {
+                    let users = try await client.albumSharingMembers()
+                    let arguments = ProcessInfo.processInfo.arguments
+                    let recipientIndex = arguments.firstIndex(of: "--sharing-test-user")
+                    let username = recipientIndex.flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+                        ?? UserDefaults.standard.string(forKey: "accountName") ?? ""
+                    guard let own = users.first(where: { $0.name == username }) else {
+                        record("Own account is not in selectable users; no write test performed"); return
+                    }
+                    guard let id = try await client.createAlbum(name: "Fotera Sharing Check " + UUID().uuidString, items: []) else { throw ConnectionError.invalidResponse }
+                    do {
+                        let granted = try await client.updateAlbumMember(id: id, member: own, role: .view)
+                        guard granted.additional?.sharing_info?.privacy_type == "private" else { throw ConnectionError.invalidResponse }
+                        record("PASS: view permission saved and read back; public access remains off")
+                        _ = try await client.updateAlbumSharing(id: id, enabled: false, role: "view", password: "", expiration: nil)
+                        let preserved = try await client.albumSharing(id: id)
+                        guard preserved.additional?.sharing_info?.permission?.contains(where: { $0.member.id == own.id && $0.role == "view" }) == true else { throw ConnectionError.invalidResponse }
+                        record("PASS: disabling public link preserves invited users")
+                        _ = try await client.updateAlbumMember(id: id, member: own, role: .download)
+                        record("PASS: permission change read back")
+                        _ = try await client.updateAlbumMember(id: id, member: own, role: nil)
+                        record("PASS: permission removal read back")
+                    } catch {
+                        try? recordShape("Write response shape", try await client.featureContract("SYNO.Foto.Browse.Album", method: "get", fields: ["id": "[\(id)]", "additional": "[\"sharing_info\"]"]))
+                        try await client.deleteAlbum(id: id)
+                        record("Removed empty test album")
+                        throw error
+                    }
+                    try await client.deleteAlbum(id: id)
+                    record("PASS: removed empty test album")
+                }
+                record("FINISHED SHARING CONTRACT CHECKS"); return
+            }
             if ProcessInfo.processInfo.arguments.contains("--login-session-tests") {
                 do {
                     try await client.verifyLoginSession("PhotoHarbor")
@@ -384,6 +572,35 @@ import Photos
                     catch { record("CONTRACT \(api).\(method): " + error.localizedDescription) }
                 }
                 record("FINISHED FEATURE CONTRACTS"); return
+            }
+            if ProcessInfo.processInfo.arguments.contains("--people-save-audit") {
+                record("Personal Space name persistence audit")
+                let recovery = documents.appendingPathComponent("people-name-recovery.json")
+                struct Recovery: Codable { let id: Int; let name: String }
+                if let data = try? Data(contentsOf: recovery), let pending = try? JSONDecoder().decode(Recovery.self, from: data) {
+                    _ = try await client.renamePerson(id: pending.id, name: pending.name, shared: false)
+                    try FileManager.default.removeItem(at: recovery)
+                    record("Recovered the original name from an interrupted verification")
+                }
+                let people = try await client.allPeople(shared: false, includeHidden: true)
+                record("People: \(people.count); named: \(people.filter { !$0.name.isEmpty }.count)")
+                guard let person = people.first(where: { !$0.name.isEmpty }) ?? people.first else { throw ConnectionError.invalidResponse }
+                let before = try await client.items(.person(person.id), shared: false, offset: 0, limit: 20).map(\.id)
+                try JSONEncoder().encode(Recovery(id: person.id, name: person.name)).write(to: recovery, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                do {
+                    let temporary = "Fotera save check " + UUID().uuidString.prefix(8)
+                    _ = try await client.renamePerson(id: person.id, name: temporary, shared: false)
+                    try await Task.sleep(for: .seconds(2))
+                    let reread = try await client.allPeople(shared: false, includeHidden: true).first { $0.id == person.id }
+                    guard reread?.name == temporary else { throw ConnectionError.invalidResponse }
+                    record("PASS: changed name persisted across separate server reads")
+                } catch { record("FAIL: actual rename: " + error.localizedDescription) }
+                _ = try await client.renamePerson(id: person.id, name: person.name, shared: false)
+                let after = try await client.items(.person(person.id), shared: false, offset: 0, limit: 20).map(\.id)
+                guard before == after else { throw ConnectionError.invalidResponse }
+                try FileManager.default.removeItem(at: recovery)
+                record("PASS: original name restored; photo membership unchanged")
+                record("FINISHED PEOPLE SAVE AUDIT"); return
             }
             if ProcessInfo.processInfo.arguments.contains("--people-tests") {
                 let people = try await client.people(shared: false)

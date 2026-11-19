@@ -25,13 +25,20 @@ import UIKit
     func flush() async { await worker?.value }
 
     private func apply(_ state: BackupActivityAttributes.ContentState, enabled: Bool) async {
-        if activity == nil { activity = Activity<BackupActivityAttributes>.activities.first }
+        if activity == nil {
+            activity = Activity<BackupActivityAttributes>.activities.first {
+                $0.activityState == .active || $0.activityState == .stale
+            }
+        }
         if activity?.activityState == .dismissed { activity = nil; dismissed = true }
         if activity?.activityState == .ended { activity = nil }
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(5 * 60))
-        if !enabled || state.phase == .complete {
+        if !enabled || state.phase == .complete || !state.hasPendingWork {
             if let activity {
-                await activity.end(content, dismissalPolicy: enabled ? .after(Date().addingTimeInterval(60)) : .immediate)
+                await activity.end(content, dismissalPolicy: .immediate)
+            }
+            for existing in Activity<BackupActivityAttributes>.activities where existing.id != activity?.id {
+                await existing.end(nil, dismissalPolicy: .immediate)
             }
             activity = nil; lastSent = nil; dismissed = false
             return

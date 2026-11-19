@@ -64,8 +64,12 @@ struct RemotePhoto: Codable, Identifiable, Sendable, Hashable {
         let longitude: Double
     }
     var date: Date? { time.map(Date.init(timeIntervalSince1970:)) }
-    var isVideo: Bool { type == "video" }
-    var isLive: Bool { type == "live" }
+    // Synology can retain type=live on a standalone motion resource after import.
+    // A MOV/MP4 primary is a video, not a still that needs a paired Live Photo viewer.
+    var isVideo: Bool {
+        type == "video" || (type == "live" && ["mov", "mp4", "m4v"].contains((filename as NSString).pathExtension.lowercased()))
+    }
+    var isLive: Bool { type == "live" && !isVideo }
     /// "0:59" or "1:02:03", from the NAS's video metadata (milliseconds).
     var durationText: String? {
         guard let milliseconds = additional?.video_meta?.duration, milliseconds > 0 else { return nil }
@@ -92,7 +96,7 @@ struct ThumbnailSource: Hashable, Sendable {
 }
 
 struct CoverThumbnail: Codable, Hashable, Sendable {
-    let cache_key: String
+    let cache_key: String?
     let unit_id: Int?
 }
 struct CoverAdditional: Codable, Hashable, Sendable {
@@ -107,7 +111,8 @@ struct RemoteAlbum: Codable, Identifiable, Hashable, Sendable {
     var type: String?
     var additional: CoverAdditional?
     var cover: ThumbnailSource? {
-        additional?.thumbnail.flatMap { thumb in thumb.unit_id.map { ThumbnailSource(id: $0, cacheKey: thumb.cache_key, kind: "unit") } }
+        guard let thumb = additional?.thumbnail, let key = thumb.cache_key, !key.isEmpty, let id = thumb.unit_id else {return nil}
+        return ThumbnailSource(id:id,cacheKey:key,kind:"unit")
     }
 }
 
@@ -119,9 +124,9 @@ struct RemoteGroup: Codable, Identifiable, Hashable, Sendable {
     var country: String?
     var additional: CoverAdditional?
     func cover(kind: String) -> ThumbnailSource? {
-        guard let thumb = additional?.thumbnail else { return nil }
-        if kind == "person" { return ThumbnailSource(id: id, cacheKey: thumb.cache_key, kind: "person") }
-        return thumb.unit_id.map { ThumbnailSource(id: $0, cacheKey: thumb.cache_key, kind: "unit") }
+        guard let thumb = additional?.thumbnail, let key = thumb.cache_key, !key.isEmpty else { return nil }
+        if kind == "person" { return ThumbnailSource(id: id, cacheKey: key, kind: "person") }
+        return thumb.unit_id.map { ThumbnailSource(id: $0, cacheKey: key, kind: "unit") }
     }
 }
 
@@ -135,6 +140,17 @@ struct RemoteFolder: Codable, Identifiable, Hashable, Sendable {
 }
 
 struct AlbumSharingState: Decodable {
+    /// DSM's `shared` flag enables sharing machinery; it does not prove anyone has access.
+    func hasActiveSharing(now:Date = Date()) -> Bool {
+        guard shared == true else {return false}
+        guard let info = additional?.sharing_info else {return true}
+        let publicLink = info.privacy_type?.hasPrefix("public-") == true
+            && (info.expiration == nil || info.expiration == 0 || info.expiration! > now.timeIntervalSince1970)
+        let invited = info.permission?.contains {entry in
+            ["user","group"].contains(entry.member.type) && entry.role != "owner" && !entry.role.isEmpty
+        } ?? false
+        return publicLink || invited
+    }
     let passphrase: String?
     let id: Int
     let shared: Bool?
@@ -143,9 +159,43 @@ struct AlbumSharingState: Decodable {
     struct Info: Decodable {
         let passphrase: String?
         let sharing_link: String?
+        let permission: [AlbumSharePermission]?
         let privacy_type: String?
         let enable_password: Bool?
         let expiration: Double?
+    }
+}
+
+struct AlbumShareMember: Codable, Identifiable, Hashable {
+    let type: String
+    let id: Int
+    let name: String
+}
+struct AlbumSharePermission: Decodable {
+    let role: String
+    let member: Member
+    private enum CodingKeys: String, CodingKey { case role, member }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(String.self, forKey: .role)
+        // DSM returns flat permission entries; accept nested entries as well.
+        member = try container.decodeIfPresent(Member.self, forKey: .member) ?? Member(from: decoder)
+    }
+    struct Member: Decodable {
+        let type: String
+        let id: Int?
+        let name: String?
+    }
+}
+enum AlbumShareRole: String, CaseIterable, Identifiable {
+    case view, download, upload
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .view: return "View"
+        case .download: return "View and download"
+        case .upload: return "Contribute"
+        }
     }
 }
 
@@ -228,6 +278,7 @@ enum LocalLibrarySearch {
 
 
 /// One metadata scan per Photos change, off the main thread. No originals are downloaded.
+#if os(iOS)
 actor PhoneLibraryIndex {
     static let shared = PhoneLibraryIndex()
     private var cached: [RemotePhoto]?
@@ -271,6 +322,8 @@ actor PhoneLibraryIndex {
         return item
     }
 }
+
+#endif
 
 /// Conservative one-to-one matching for display only. Destructive operations still verify bytes.
 enum UnifiedLibrary {
@@ -331,8 +384,14 @@ enum UnifiedLibrary {
         var matched = Set<Int>()
         var result = remote.enumerated().map { index, item -> RemotePhoto in
             guard let proposal = proposals[index], let choices = reverse[proposal.local],
-                  let best = choices.map(\.score).max(), proposal.score == best,
-                  choices.filter({ $0.score == best }).count == 1 else { return item }
+                  let best = choices.map(\.score).max(), proposal.score == best else { return item }
+            let winners = choices.filter { $0.score == best }
+            if winners.count > 1 {
+                // Several proven uploads of one phone asset are not an ambiguous identity.
+                // Attach the local viewer to one deterministic NAS row, retaining all NAS copies.
+                guard best == 1000,
+                      winners.max(by: { remote[$0.remote].id < remote[$1.remote].id })?.remote == index else { return item }
+            }
             let phone = local[proposal.local]
             var merged = item
             merged.localAssetID = phone.localAssetID; merged.localVersion = phone.localVersion
@@ -354,12 +413,28 @@ struct UploadPhotoLink: Codable, Sendable {
     let localID: String
     let shared: Bool
     let created: Date
+    #if os(iOS)
     init?(record: TransferRecord) {
         guard record.state.isFinished, let remote = record.remoteID,
               let source = record.sourceID, let identifier = PhoneDeletionMatch.sourceAssetID(source) else { return nil }
         remoteID = remote; localID = identifier; shared = record.shared; created = record.created
     }
+    #endif
     init(remoteID: Int, localID: String, shared: Bool, created: Date) {
         self.remoteID = remoteID; self.localID = localID; self.shared = shared; self.created = created
+    }
+}
+
+/// Shared incremental index reconciliation for iPhone and Mac.
+enum RecentPhotoIndex {
+    static func merge(known: [RemotePhoto], page: [RemotePhoto], total: Int) -> [RemotePhoto]? {
+        guard !known.isEmpty, !page.isEmpty, total >= known.count else { return nil }
+        let knownIDs = Set(known.map(\.id)), pageIDs = Set(page.map(\.id))
+        guard knownIDs.count == known.count, pageIDs.count == page.count else { return nil }
+        let overlap = page.filter { knownIDs.contains($0.id) }.map(\.id)
+        guard !overlap.isEmpty, overlap == Array(known.prefix(overlap.count)).map(\.id),
+              pageIDs.subtracting(knownIDs).count == total - known.count else { return nil }
+        let result = page + known.filter { !pageIDs.contains($0.id) }
+        return result.count == total ? result : nil
     }
 }

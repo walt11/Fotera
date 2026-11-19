@@ -18,6 +18,28 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+enum TimelineStorageFilter: String, CaseIterable, Identifiable, Sendable {
+    case all = "All", deviceOnly = "Device only", cloudOnly = "Cloud only", both = "Both"
+    var id: String { rawValue }
+    func includes(_ photo: RemotePhoto) -> Bool {
+        switch self {
+        case .all: return true
+        case .deviceOnly: return photo.isLocalOnly
+        case .cloudOnly: return !photo.isLocalOnly && photo.localAssetID == nil
+        case .both: return !photo.isLocalOnly && photo.localAssetID != nil
+        }
+    }
+    func apply(to sections: [GridSection]) -> [GridSection] {
+        guard self != .all else { return sections }
+        return sections.compactMap { section in
+            let items = section.items.filter(includes)
+            guard !items.isEmpty else { return nil }
+            return GridSection(id: section.id, title: section.title, items: items,
+                               group: section.group, groupTitle: section.groupTitle)
+        }
+    }
+}
+
 /// The timeline index for one space. It keeps the full metadata list on device so the grid,
 /// memories, scrubber and offline browsing work without paging through the NAS.
 @MainActor final class LibraryStore: ObservableObject {
@@ -25,6 +47,8 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     @Published private(set) var sections: [TimelineSection] = []
     /// `sections` as grid input, built once per change instead of on every redraw.
     @Published private(set) var gridSections: [GridSection] = []
+    @Published private(set) var filteredGridSections: [GridSection] = []
+    @Published var storageFilter: TimelineStorageFilter = .all { didSet { if oldValue != storageFilter { rebuild() } } }
     @Published private(set) var memories: [Memory] = []
     @Published private(set) var videos: [RemotePhoto] = []
     @Published private(set) var located: [RemotePhoto] = []
@@ -84,12 +108,15 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         refreshPhoneLibrary()
     }
     func refreshPhoneLibrary() {
+        #if DEBUG
+        if StoreScreenshots.enabled { return }
+        #endif
         let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let accessChanged = access != photoAccess
         photoAccess = access
         phoneTask?.cancel()
         let generation = UUID(); phoneGeneration = generation
-        guard client != nil, !shared else { phonePhotos = []; publishUnified(); return }
+        guard client != nil, !shared else { loadingPhone = false; phonePhotos = []; publishUnified(); return }
         loadingPhone = LocalAssets.allowed
         phoneTask = Task {
             if accessChanged { await PhoneLibraryIndex.shared.invalidate() }
@@ -107,12 +134,38 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         let space = shared
         let generation = UUID(); mergeGeneration = generation
         Task {
-            let unified = await Task.detached(priority: .userInitiated) { UnifiedLibrary.merge(remote: remote, local: local, links: links, shared: space) }.value
+            let (unified, lookup) = await Task.detached(priority: .userInitiated) {
+                let items = UnifiedLibrary.merge(remote: remote, local: local, links: links, shared: space)
+                return (items, Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first }))
+            }.value
             guard generation == mergeGeneration else { return }
-            photos = unified; rebuild()
+            positions = lookup; photos = unified; rebuild()
             #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--backup-matching-report") {
+                let report = await Task.detached(priority: .utility) { () -> Data? in
+                    let byLocal = Dictionary(grouping: links, by: \.localID)
+                    let remoteIDs = Set(remote.map(\.id))
+                    let missing = unified.filter(\.isLocalOnly)
+                    var reasons: [String: Int] = [:]
+                    let samples: [[String: Any]] = missing.map { item in
+                        let all = byLocal[item.localAssetID ?? ""] ?? []
+                        let relevant = all.filter { $0.shared == space }
+                        let present = relevant.filter { remoteIDs.contains($0.remoteID) }
+                        let usable = present.filter { (item.localVersion ?? 0) <= $0.created.timeIntervalSince1970 + 2 }
+                        let reason = all.isEmpty ? "noUploadLink" : relevant.isEmpty ? "otherSpace" : present.isEmpty ? "remoteNotInIndex" : usable.isEmpty ? "modifiedSinceUpload" : "linkedButUnmatched"
+                        reasons[reason, default: 0] += 1
+                        return ["filename": item.filename, "reason": reason, "links": relevant.count, "present": present.count]
+                    }
+                    return try? JSONSerialization.data(withJSONObject: ["remoteCount": remote.count, "localCount": local.count,
+                        "deviceOnly": missing.count, "shared": space, "reasons": reasons, "samples": Array(samples.prefix(20))], options: [.prettyPrinted, .sortedKeys])
+                }.value
+                if generation == mergeGeneration, let report {
+                    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("backup-matching-report.json")
+                    try? report.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("--matching-report") {
-                let target = "IMG_3288"
+                let target = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--matching-filename=") }).map { String($0.dropFirst("--matching-filename=".count)).uppercased() } ?? "IMG_3288"
                 func entry(_ item: RemotePhoto) -> [String: Any] {
                     var value: [String: Any] = ["id": item.id, "filename": item.filename, "type": item.type]
                     value["time"] = item.time; value["localCaptureTime"] = item.localCaptureTime
@@ -238,24 +291,27 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     /// Merge only when the newest page accounts for every added item and overlaps the
     /// cached prefix in order. Older imports, deletions and replacements require reconciliation.
     nonisolated static func mergeRecent(known: [RemotePhoto], page: [RemotePhoto], total: Int) -> [RemotePhoto]? {
-        guard !known.isEmpty, !page.isEmpty, total >= known.count else { return nil }
-        let knownIDs = Set(known.map(\.id)), pageIDs = Set(page.map(\.id))
-        guard knownIDs.count == known.count, pageIDs.count == page.count else { return nil }
-        let overlap = page.filter { knownIDs.contains($0.id) }.map(\.id)
-        guard !overlap.isEmpty, overlap == Array(known.prefix(overlap.count)).map(\.id),
-              pageIDs.subtracting(knownIDs).count == total - known.count else { return nil }
-        let result = page + known.filter { !pageIDs.contains($0.id) }
-        return result.count == total ? result : nil
+        RecentPhotoIndex.merge(known: known, page: page, total: total)
     }
 
     /// The list API doesn't report favorites, so fetch the (usually short) favorites list for tile hearts.
     private func refreshFavorites(client: DSMClient, space: Bool, generation: UUID) async {
+        do {
+            let favorites = try await Self.favoriteIDs { offset in
+                try await client.items(.favorites, shared: space, offset: offset)
+            }
+            guard generation == syncGeneration, !Task.isCancelled else { return }
+            FavoriteMarks.shared.replace(favorites)
+        } catch { /* Keep the last complete snapshot on cancellation or a failed page. */ }
+    }
+    nonisolated static func favoriteIDs(page: (Int) async throws -> [RemotePhoto]) async throws -> Set<Int> {
         var favorites = Set<Int>(); var offset = 0
-        while let page = try? await client.items(.favorites, shared: space, offset: offset) {
-            favorites.formUnion(page.map(\.id)); offset += page.count
-            if page.count < DSMClient.pageSize { break }
+        while true {
+            try Task.checkCancellation()
+            let items = try await page(offset)
+            favorites.formUnion(items.map(\.id)); offset += items.count
+            if items.count < DSMClient.pageSize { return favorites }
         }
-        if generation == syncGeneration { FavoriteMarks.shared.replace(favorites) }
     }
     func refreshAndWait() async {
         // Don't hold the refresh for a route check: a failed read re-checks the route and retries.
@@ -289,6 +345,19 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         ids.compactMap { positions[$0] }.sorted().map { photos[$0] }
     }
 
+    #if DEBUG
+    func loadStoreScreenshotFixtures() {
+        guard StoreScreenshots.enabled else { return }
+        mergeGeneration = UUID()
+        photos = StoreScreenshots.photos
+        remotePhotos = photos.filter { !$0.isLocalOnly }
+        positions = Dictionary(uniqueKeysWithValues: photos.enumerated().map { ($0.element.id, $0.offset) })
+        photoAccess = .authorized
+        FavoriteMarks.shared.replace([1, 3, 4])
+        rebuild()
+    }
+    #endif
+
     private func apply(_ items: [RemotePhoto]) {
         remotePhotos = items
         publishUnified()
@@ -300,13 +369,16 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     /// Groups the timeline and derived lists off the main thread; the newest build wins.
     private func rebuild() {
         let generation = UUID(); buildGeneration = generation
-        let items = photos; let grouping = grouping
+        let items = photos; let grouping = grouping; let filter = storageFilter
         builtForDay = Self.today()
         Task {
-            let built = await Task.detached(priority: .userInitiated) { Self.build(items, grouping: grouping) }.value
+            let (built, filtered) = await Task.detached(priority: .userInitiated) {
+                let built = Self.build(items, grouping: grouping)
+                return (built, filter.apply(to: built.grid))
+            }.value
             guard generation == buildGeneration else { return }
-            sections = built.sections; gridSections = built.grid; memories = built.memories
-            videos = built.videos; located = built.located; years = built.years; positions = built.positions
+            sections = built.sections; gridSections = built.grid; filteredGridSections = filtered; memories = built.memories
+            videos = built.videos; located = built.located; years = built.years
             refreshWidgetMemories()
         }
     }
@@ -320,7 +392,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
     }
     private struct Built: Sendable {
         let sections: [TimelineSection]; let grid: [GridSection]; let memories: [Memory]
-        let videos: [RemotePhoto]; let located: [RemotePhoto]; let years: [Int]; let positions: [Int: Int]
+        let videos: [RemotePhoto]; let located: [RemotePhoto]; let years: [Int]
     }
     nonisolated private static func build(_ photos: [RemotePhoto], grouping: TimelineGrouping) -> Built {
         let calendar = PhotoTime.calendar
@@ -329,16 +401,14 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         var currentStart: Date?
         var bucket: [RemotePhoto] = []
         var videos: [RemotePhoto] = [], located: [RemotePhoto] = []
-        var years = Set<Int>(), positions: [Int: Int] = [:]
-        positions.reserveCapacity(photos.count)
+        var years = Set<Int>()
         func flush() {
             guard let start = currentStart, !bucket.isEmpty else { return }
             let title = start == .distantPast ? "Unknown date" : (grouping == .day ? PhotoTime.dayTitle(start) : PhotoTime.monthTitle(start))
             result.append(TimelineSection(id: start, title: title, items: bucket))
         }
         // Items arrive sorted newest-first, so one linear pass builds every section and list.
-        for (index, item) in photos.enumerated() {
-            positions[item.id] = index
+        for item in photos {
             if item.isVideo { videos.append(item) }
             if item.additional?.gps != nil { located.append(item) }
             let date = item.date
@@ -356,7 +426,7 @@ enum TimelineGrouping: String, CaseIterable, Identifiable, Sendable {
         }
         let grid = result.map { GridSection(id: String($0.id.timeIntervalSince1970), title: $0.title, items: $0.items) }
         return Built(sections: result, grid: grid, memories: memories(from: photos), videos: videos, located: located,
-                     years: years.sorted(by: >), positions: positions)
+                     years: years.sorted(by: >))
     }
     /// Match the exact capture month/day against the user's local Gregorian date.
     nonisolated static func memories(from photos: [RemotePhoto], now: Date = Date(), timeZone: TimeZone = .current) -> [Memory] {
@@ -387,35 +457,51 @@ enum WidgetMemories {
     @MainActor static func refresh(memories: [Memory], photos: [RemotePhoto], shared: Bool, account: String) async {
         // Personal library only: otherwise switching to Shared Space and back replaces the widget each time.
         guard WidgetSnapshotStore.isAvailable, !shared, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
-        var local = Calendar(identifier: .gregorian)
-        local.timeZone = .current
-        let today = local.dateComponents([.year, .month, .day], from: Date())
-        // Version the stamp so an existing adjacent-day widget selection is replaced.
-        let stamp = "preview-v3-\(LibraryCache.hash(account))-\(today.year!)-\(today.month!)-\(today.day!)"
-        guard checkedStamp != stamp else { return }
-        guard WidgetSnapshot.needsRefresh(stamp: stamp, savedStamp: UserDefaults.standard.string(forKey: "widgetMemoriesStamp"), snapshots: WidgetSnapshotStore.readMemories()) else { checkedStamp = stamp; return }
-        var picks: [(String, RemotePhoto)] = memories.flatMap { memory in memory.items.filter { !$0.isVideo }.prefix(2).map { (memory.title, $0) } }
-        if picks.isEmpty {
-            let stills = photos.filter { !$0.isVideo }
-            picks = (0..<min(6, stills.count)).compactMap { _ in stills.randomElement() }.map { photo in
-                (photo.date.map { PhotoTime.format($0, .dateTime.month(.abbreviated).day().year()) } ?? "From your library", photo)
+        let local = WidgetMemorySchedule.calendar()
+        let now = Date()
+        let day = WidgetMemorySchedule.dayKey(now, calendar: local)
+        let stamp = "preview-v4-\(LibraryCache.hash(account))-\(day)-\(local.timeZone.identifier)-\(photos.count)"
+        let savedStamp = UserDefaults.standard.string(forKey: "widgetMemoriesStamp")
+        if checkedStamp == stamp, savedStamp == stamp, WidgetSnapshotStore.hasMemorySchedule { return }
+        if savedStamp == stamp, let saved = WidgetSnapshotStore.readMemorySchedule(),
+           !saved.fallback.isEmpty, !WidgetSnapshot.needsRefresh(stamp: stamp, savedStamp: savedStamp,
+                snapshots: saved.fallback + saved.days.values.flatMap({ $0 })) {
+            checkedStamp = stamp; return
+        }
+        var imageData: [Int: Data] = [:]
+        func preview(_ photo: RemotePhoto, title: String, date: Date) async -> WidgetSnapshot? {
+            if let cached = imageData[photo.id] { return .init(title: title, image: cached, date: date) }
+            guard !Task.isCancelled else { return nil }
+            var image: UIImage?
+            if let source = photo.thumbnailSource { image = await ImagePipeline.shared.image(source, shared: shared, size: .xl) }
+            if image == nil { image = await ImagePipeline.shared.originalPreview(photo, shared: shared, size: .xl) }
+            guard let image, !Task.isCancelled else { return nil }
+            let data = WidgetSnapshot.previewData(image); imageData[photo.id] = data
+            return .init(title: title, image: data, date: date)
+        }
+        // Generic titles remain correct when the dated plan runs out, even if the app stays closed.
+        var fallback: [WidgetSnapshot] = []
+        for photo in photos.filter({ !$0.isVideo }).shuffled().prefix(6) {
+            let title = photo.date.map { PhotoTime.format($0, .dateTime.month(.abbreviated).day().year()) } ?? "From your library"
+            if let entry = await preview(photo, title: title, date: now) { fallback.append(entry) }
+        }
+        var days: [String: [WidgetSnapshot]] = [:]
+        for offset in 0..<7 {
+            guard !Task.isCancelled, let date = local.date(byAdding: .day, value: offset, to: local.startOfDay(for: now)) else { return }
+            let daily = LibraryStore.memories(from: photos, now: date, timeZone: local.timeZone)
+            let picks = daily.flatMap { memory in memory.items.filter { !$0.isVideo }.prefix(2).map { (memory.title, $0) } }
+            var entries: [WidgetSnapshot] = []
+            for (title, photo) in picks.prefix(6) {
+                if let entry = await preview(photo, title: title, date: date) { entries.append(entry) }
             }
+            days[WidgetMemorySchedule.dayKey(date, calendar: local)] = entries
         }
-        var entries: [WidgetSnapshot] = []
-        for (title, photo) in picks.prefix(6) {
-            var preview: UIImage?
-            if let source = photo.thumbnailSource { preview = await ImagePipeline.shared.image(source, shared: shared, size: .xl) }
-            if preview == nil { preview = await ImagePipeline.shared.originalPreview(photo, shared: shared, size: .xl) }
-            guard let image = preview else { continue }
-            guard !Task.isCancelled else { return }
-            let data = WidgetSnapshot.previewData(image)
-            entries.append(WidgetSnapshot(title: title, image: data, date: Date()))
-        }
-        guard !entries.isEmpty, !Task.isCancelled, UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
+        guard !fallback.isEmpty || days.values.contains(where: { !$0.isEmpty }), !Task.isCancelled,
+              UserDefaults.standard.object(forKey: "widgetMemories") as? Bool ?? true else { return }
         do {
-            try WidgetSnapshotStore.saveMemories(entries)
+            try WidgetSnapshotStore.saveMemorySchedule(.init(days: days, fallback: fallback))
             UserDefaults.standard.set(stamp, forKey: "widgetMemoriesStamp"); checkedStamp = stamp
-            WidgetCenter.shared.reloadAllTimelines()
+            WidgetCenter.shared.reloadTimelines(ofKind: "FoteraPhoto")
         } catch {}
     }
 }

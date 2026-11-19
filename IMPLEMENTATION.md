@@ -206,3 +206,33 @@ Login investigation:
 - A probe with a nonexistent account reached the password check (error 400) on both v6 and v7 with Fotera's parameters, so the request shape is accepted.
 - The phone's DEBUG login log (result codes only) shows the final code working: a 403 with challenge followed by a successful sign-in that used it, and six further successful sign-ins.
 - Open: whether `session=webui` ties the app's session to DSM's web-UI logout timer is untested; it would show up as more frequent renewals.
+
+## NAS thumbnail uploads (November 15)
+
+New upload bodies include `thumb_sm`, `thumb_m`, and `thumb_xl` JPEG parts alongside the unchanged original using `SYNO.Foto[Team].Upload.Item.upload_to_folder` v8. The field names, aspect-fit sizes (240/320/1280), quality 0.9, and version were observed in this NAS's `/webman/3rdparty/SynologyPhotos/react_bundle.js`. API discovery must advertise v8; older servers retain the original upload path.
+
+Generation runs off the main thread from the staged file with ImageIO orientation handling and bounded sRGB output. Supported videos use an oriented AVFoundation frame; Live Photo motion resources do not replace the still's preview. Unsupported media still backs up as an original. The JPEGs travel in the existing durable background multipart body, so they need no separate upload task, completion count, or retry ledger. This does not transcode videos, repair previously uploaded files, or install a NAS background service.
+
+Validation: 66 simulator tests passed. A synthetic HEIC was uploaded through the real queue from the iPhone to personal space in `/Fotera Validation`, its original was downloaded and byte-verified, and all three thumbnail sizes returned by the NAS matched the generated JPEGs byte-for-byte. The check bypassed Fotera's image caches. Shared-space upload uses the same observed client contract, but was not separately exercised. DEBUG launch: `--fotera-verify --upload-preview-tests` (retains the synthetic fixture for inspection).
+
+## Repairing historical backup identities (November 15)
+
+Confirmed on the phone: IMG_0117.jpg had a completed backup link to retired NAS item 25161. Its exact original is currently NAS item 50138, named IMG_0117+1.jpg, with a different timestamp. Name/date matching correctly declined to guess, but the historical link was never reconciled.
+
+After backup catches up, completed phone assets that remain unmatched are now checked against the current NAS catalog using the existing original-resource SHA-256 verification. Exact matches save a new durable upload link and refresh the timeline; this does not enqueue originals or restore deliberately deleted NAS files. Successful checks are memoized for the current catalog and local revision, respect cancellation/deadlines, and scope identities by account and space. Multiple proven NAS copies no longer produce an extra device-only row; one deterministic NAS row gets the local viewer, while all NAS copies remain visible. Unresolved historical backups are reported in backup status instead of an unqualified “Up to date.”
+
+Validation: 68 tests passed, including renamed/date-changed identity recovery, deleted originals remaining device-only, conflicting identities, and multiple proven NAS copies. A live repair saved 23 links and reduced device-only timeline entries from 32 to 12; IMG_0117.jpg now matches item 50138. Twelve entries remain unresolved (8 without a retained upload link, 1 pointing to an absent NAS ID, 3 with linked but incompatible media identities); these were not guessed or re-uploaded. DEBUG diagnostics are opt-in and operate without uploading or deleting originals.
+
+## Remaining device-only matches (November 15)
+
+A fresh NAS/PhotoKit audit identified six PNG assets with edited JPEG renditions already on the NAS and three standalone MOV/MP4 originals incorrectly labeled `type=live` by Synology. Reconciliation now checks the exact bytes of original, edited, and alternate still resources (or original/edited video). Finding an edited rendition saves display identity only: it never marks an unverified original as verified or makes that original eligible for removal. Imported motion files with a video extension are classified as videos even if their NAS type is live; their original download uses item_id, preserving the request previously used for these files by livePackage. Real HEIC/JPEG Live Photos retain paired-photo behavior.
+
+The user explicitly chose matching fixes only, not restoration of missing originals. Live validation saved six edited-resource links, corrected all three video matches, and reduced device-only entries from twelve to three with the NAS item count unchanged at 3150. The three remaining files have no verified NAS equivalent: IMG_0040.AVIF, IMG_20260809_201018.jpg, and the JPG beginning 11357f2a1a4358ed. No original was uploaded, deleted, or restored by the repair. Seventy regression tests passed.
+
+## Memory widget day rollover (November 16)
+
+The old widget repeatedly generated hourly entries from the last app-written `memories-widget.json` array. Its timeline could refresh independently, but the selection itself never changed days until the app rebuilt it.
+
+The app now prepares seven dated daily selections and a small evergreen fallback in the App Group's atomic `memories-schedule.json`. The extension chooses by its local Gregorian date and supplies 48 future hourly boundaries, including midnight, rather than repeating today's array across tomorrow. Calendar hour intervals handle daylight-saving changes. Beyond the prepared week, it rotates fallback photos with absolute capture-date titles, never stale relative anniversary labels. Pinned photos remain pinned. Disabling memories and signing out clear the new schedule; cache stamps include account, timezone, date, and library count. The extension still receives no NAS credentials and makes no network requests.
+
+Validation: 73 tests passed, including decoding a saved schedule and selecting tomorrow without any app refresh, expired-cache fallback, and both DST transitions. Release app and widget extension build successfully. WidgetKit ultimately controls presentation timing; this schedules future entries rather than promising an exact-time background launch.

@@ -103,3 +103,7 @@ Live Photo still representations. Ambiguous matches remain separate. This is not
 file contents. Shared Space remains a NAS-only collection. Limited Photos access
 shows only the items granted by the user. Cloud originals load on demand; iCloud
 Photos may supply an original when it has been optimized off the phone.
+
+## Native Mac app
+
+The native macOS app has its own project at `Mac/FoteraMac.xcodeproj` and uses the **FoteraMac** scheme. See [Mac setup and implementation status](Mac/README.md) for building, local trial instructions, folder backup behavior, verification results and remaining iPhone parity work.

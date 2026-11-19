@@ -1,5 +1,20 @@
 import SwiftUI
 import WidgetKit
+#if os(macOS)
+import AppKit
+typealias WidgetPlatformImage = NSImage
+#else
+typealias WidgetPlatformImage = UIImage
+#endif
+extension Image {
+    init(widgetImage:WidgetPlatformImage) {
+        #if os(macOS)
+        self.init(nsImage:widgetImage)
+        #else
+        self.init(uiImage:widgetImage)
+        #endif
+    }
+}
 
 struct PhotoEntry: TimelineEntry {
     let date: Date
@@ -8,20 +23,24 @@ struct PhotoEntry: TimelineEntry {
 struct PhotoProvider: TimelineProvider {
     func placeholder(in context: Context) -> PhotoEntry { PhotoEntry(date: Date(), snapshot: nil) }
     func getSnapshot(in context: Context, completion: @escaping (PhotoEntry) -> Void) {
-        completion(PhotoEntry(date: Date(), snapshot: WidgetSnapshotStore.read() ?? WidgetSnapshotStore.readMemories().first))
+        let now = Date()
+        completion(PhotoEntry(date: now, snapshot: WidgetSnapshotStore.read() ?? Self.schedule().snapshot(at: now)))
     }
-    /// A pinned photo stays put. Otherwise the widget rotates through today's memories every hour.
+    private static func schedule() -> WidgetMemorySchedule {
+        if let saved = WidgetSnapshotStore.readMemorySchedule() { return saved }
+        // Migrate an older cache only for its own day; never repeat yesterday's relative titles.
+        let calendar = WidgetMemorySchedule.calendar()
+        let current = WidgetSnapshotStore.readMemories().filter { calendar.isDate($0.date, inSameDayAs: Date()) }
+        return WidgetMemorySchedule(days: [WidgetMemorySchedule.dayKey(Date()): current], fallback: [])
+    }
     func getTimeline(in context: Context, completion: @escaping (Timeline<PhotoEntry>) -> Void) {
+        let now = Date()
         if let pinned = WidgetSnapshotStore.read() {
-            completion(Timeline(entries: [PhotoEntry(date: Date(), snapshot: pinned)], policy: .never)); return
+            completion(Timeline(entries: [PhotoEntry(date: now, snapshot: pinned)], policy: .never)); return
         }
-        let memories = WidgetSnapshotStore.readMemories()
-        guard !memories.isEmpty else {
-            completion(Timeline(entries: [PhotoEntry(date: Date(), snapshot: nil)], policy: .after(Date().addingTimeInterval(15 * 60)))); return
-        }
-        let start = Date()
-        let entries = (0..<12).map { hour in
-            PhotoEntry(date: start.addingTimeInterval(Double(hour) * 3600), snapshot: memories[hour % memories.count])
+        let schedule = Self.schedule()
+        let entries = WidgetMemorySchedule.timelineDates(from: now).map {
+            PhotoEntry(date: $0, snapshot: schedule.snapshot(at: $0))
         }
         completion(Timeline(entries: entries, policy: .atEnd))
     }
@@ -30,9 +49,9 @@ struct PhotoWidgetView: View {
     let entry: PhotoEntry
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            if let snapshot = entry.snapshot, let image = UIImage(data: snapshot.image) {
+            if let snapshot = entry.snapshot, let image = WidgetPlatformImage(data: snapshot.image) {
                 GeometryReader { geometry in
-                    Image(uiImage: image).resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                    Image(widgetImage: image).resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).clipped()
                 }.privacySensitive()
                 LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
                 Text(snapshot.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).padding(12).privacySensitive()
@@ -60,7 +79,9 @@ struct FoteraPhotoWidget: Widget {
 @main struct FoteraWidgets: WidgetBundle {
     var body: some Widget {
         FoteraPhotoWidget()
+        #if os(iOS)
         BackupActivityWidget()
+        #endif
         FoteraCollectionWidget(kind: "album")
         FoteraCollectionWidget(kind: "person")
         FoteraBackupWidget()
@@ -105,7 +126,13 @@ struct FoteraBackupWidget: Widget {
                     Text(value.status).font(.caption).lineLimit(2)
                     Text(value.updated, style: .relative).font(.caption2).foregroundStyle(.secondary)
                 } else { Text("Open Fotera to enable backup.").font(.caption) }
-            }.containerBackground(.background, for: .widget).widgetURL(URL(string: "fotera://backup"))
-        }.configurationDisplayName("Fotera Backup").description("Last reported backup progress. Tap to open backup; iOS controls widget refresh timing.").supportedFamilies([.systemSmall, .systemMedium])
+            }.containerBackground(.background, for: .widget).widgetURL(URL(string: {
+                #if os(macOS)
+                return "fotera-mac://backup"
+                #else
+                return "fotera://backup"
+                #endif
+            }()))
+        }.configurationDisplayName("Fotera Backup").description("Last reported backup progress. Open backup for current progress; the system controls widget refresh timing.").supportedFamilies([.systemSmall, .systemMedium])
     }
 }

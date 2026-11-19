@@ -69,11 +69,15 @@ import Photos
         }
     }
     func share(_ items: [RemotePhoto], app: AppModel, albumID: Int? = nil) {
-        guard let client = app.client, !items.isEmpty else { return }
+        guard let client = app.client, !items.isEmpty, busy == nil else { return }
         let shared = app.shared
         cleanup()
         run(items.count == 1 ? "Preparing original…" : "Preparing \(items.count) originals…") {
             var files: [URL] = []
+            var prepared = false
+            defer {
+                if !prepared { for file in files { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) } }
+            }
             for (index, item) in items.enumerated() {
                 try Task.checkCancellation()
                 if items.count > 1 { self.busy = "Downloading \(index + 1) of \(items.count)…" }
@@ -81,12 +85,18 @@ import Photos
                 // Give shared files their real names instead of temporary identifiers.
                 let named = file.deletingLastPathComponent().appendingPathComponent(UUID().uuidString, isDirectory: true)
                 try FileManager.default.createDirectory(at: named, withIntermediateDirectories: true)
-                let target = named.appendingPathComponent(item.filename)
-                try FileManager.default.moveItem(at: file, to: target)
+                let target = named.appendingPathComponent((item.filename as NSString).lastPathComponent)
+                do { try FileManager.default.moveItem(at: file, to: target) }
+                catch {
+                    try? FileManager.default.removeItem(at: file)
+                    try? FileManager.default.removeItem(at: named)
+                    throw error
+                }
                 files.append(target)
             }
             self.temporaryFiles = files
             self.shareFiles = files
+            prepared = true
             return nil
         }
     }

@@ -43,8 +43,6 @@ struct PhotoGrid<Header: View>: View {
     private var columns: Int { sizeClass == .regular ? storedColumns + 3 : storedColumns }
     @ObservedObject private var favorites = FavoriteMarks.shared
     @State private var viewer: ViewerRequest?
-    @State private var scrollFraction: CGFloat = 0
-    @State private var scrolling = false
     @State private var handledJump: UUID?
     @State private var highlightedJump: UUID?
 
@@ -82,7 +80,8 @@ struct PhotoGrid<Header: View>: View {
                     }
                     if let onReachEnd { Color.clear.frame(height: 1).onAppear(perform: onReachEnd) }
                 }
-                .padding(.bottom, 12)
+                // Fixed clearance keeps the final row reachable beneath the floating selection bar.
+                .padding(.bottom, 84)
                 .animation(.default, value: columns)
             }
             .onChange(of: timelineJump) { _, request in
@@ -95,9 +94,7 @@ struct PhotoGrid<Header: View>: View {
                 proxy.scrollTo(section.id, anchor: UnitPoint(x: 0.5, y: fraction))
             }
             .scrollIndicators(usesTimelineScrubber ? .hidden : .automatic)
-            .modifier(ScrollTracking(fraction: $scrollFraction, active: $scrolling))
-            .modifier(TimelineScrubber(sections: sections, proxy: proxy, enabled: usesTimelineScrubber,
-                                       fraction: scrollFraction, scrolling: scrolling))
+            .modifier(TimelineScrollChrome(sections: sections, proxy: proxy, enabled: usesTimelineScrubber))
         }
         .task(id: handledJump) {
             guard let requestID = handledJump else { return }
@@ -140,6 +137,7 @@ struct PhotoGrid<Header: View>: View {
     }
     /// Warms the next two rows so fast scrolling shows fewer empty tiles.
     private func prefetch(after index: Int, in section: GridSection) {
+        guard index % columns == 0 else { return }
         let start = index + 1, end = min(section.items.count, index + 1 + columns * 2)
         guard start < end else { return }
         let size: ThumbnailSize = columns <= 3 ? .m : .sm
@@ -157,22 +155,21 @@ struct PhotoGrid<Header: View>: View {
             Text(title).font(minor ? .footnote.weight(.medium) : .subheadline.weight(.semibold))
                 .foregroundStyle(minor ? .secondary : .primary)
             Spacer()
-            if let selection {
-                let all = section.items.allSatisfy { selection.contains($0.id) }
+            let all = selection.map { selected in section.items.allSatisfy { selected.contains($0.id) } } ?? false
                 Button {
-                    var updated = selection
+                    guard var updated = selection else {return}
                     if all { section.items.forEach { updated.remove($0.id) } } else { section.items.forEach { updated.insert($0.id) } }
                     self.selection = updated
                 } label: {
                     Image(systemName: all ? "checkmark.circle.fill" : "circle").font(.title3)
                 }.accessibilityLabel(all ? "Deselect \(title)" : "Select \(title)")
-            }
+                    .opacity(selection == nil ? 0 : 1).disabled(selection == nil).accessibilityHidden(selection == nil)
         }
         .padding(.horizontal, Theme.medium).padding(.top, minor ? 10 : 16).padding(.bottom, 6)
     }
     private func tile(_ item: RemotePhoto, in section: GridSection) -> some View {
         let selected = selection?.contains(item.id) == true
-        return ThumbnailView(source: item.thumbnailSource, shared: shared, size: columns <= 3 ? .m : .sm, fallbackPhoto: item)
+        return ThumbnailView(source: item.thumbnailSource, shared: shared, size: columns <= 3 ? .m : .sm, fallbackPhoto: item, animatesLoading: false)
             .aspectRatio(1, contentMode: .fit)
             .zoomSource(id: item.id, in: zoomNamespace)
             .overlay { TileBadges(item: item, favorite: favorites.ids.contains(item.id), compact: columns >= 6) }
@@ -218,6 +215,23 @@ extension PhotoGrid where Header == EmptyView {
          showsScrubber: Bool = false, onReachEnd: (() -> Void)? = nil, onChange: @escaping () -> Void = {}) {
         self.init(sections: sections, shared: shared, selection: selection, album: album, showsScrubber: showsScrubber,
                   onReachEnd: onReachEnd, onChange: onChange, header: { EmptyView() })
+    }
+}
+
+/// Scroll geometry belongs to the chrome, not the photo grid's body.
+private struct TimelineScrollChrome: ViewModifier {
+    let sections: [GridSection]
+    let proxy: ScrollViewProxy
+    let enabled: Bool
+    @State private var fraction: CGFloat = 0
+    @State private var scrolling = false
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .modifier(ScrollTracking(fraction: $fraction, active: $scrolling))
+                .modifier(TimelineScrubber(sections: sections, proxy: proxy, enabled: true,
+                                          fraction: fraction, scrolling: scrolling))
+        } else { content }
     }
 }
 
@@ -372,10 +386,14 @@ struct SelectionChrome: ViewModifier {
                     }
                 }
             }
-            .toolbar(selection != nil ? .hidden : .automatic, for: .tabBar)
             .navigationBarBackButtonHidden(selection != nil)
-            .safeAreaInset(edge: .bottom) {
-                if selection != nil { bar.transition(.move(edge: .bottom).combined(with: .opacity)) }
+            .overlay(alignment: .bottom) {
+                if selection != nil {
+                    bar.clipShape(RoundedRectangle(cornerRadius:18))
+                        .shadow(color:.black.opacity(0.12),radius:12,y:4)
+                        .padding(.horizontal,12).padding(.bottom,8)
+                        .transition(.move(edge:.bottom).combined(with:.opacity))
+                }
             }
             .actionRunner(runner) { finish() }
     }
